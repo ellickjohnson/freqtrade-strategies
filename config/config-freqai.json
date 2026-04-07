@@ -1,0 +1,107 @@
+{
+    "max_open_trades": 4,
+    "stake_currency": "USDT",
+    "stake_amount": 15,
+    "dry_run": true,
+    "dry_run_wallet": 1000,
+    "tradable_balance_ratio": 0.99,
+    "timeframe": "15m",
+    
+    "entry_pricing": {
+        "price_side": "same",
+        "use_order_book": true,
+        "order_book_top": 1,
+        "price_last_balance": 0.0,
+        "check_depth_of_market": {
+            "enabled": false,
+            "bids_to_ask_delta": 1
+        }
+    },
+    "exit_pricing": {
+        "price_side": "same",
+        "use_order_book": true,
+        "order_book_top": 1,
+        "price_last_balance": 0.0
+    },
+    "order_types": {
+        "entry": "limit",
+        "exit": "limit",
+        "emergency_exit": "market",
+        "force_exit": "market",
+        "force_entry": "market",
+        "stoploss": "market",
+        "stoploss_on_exchange": false,
+        "stoploss_on_exchange_interval": 60
+    },
+    "order_time_in_force": {
+        "entry": "GTC",
+        "exit": "GTC"
+    },
+    
+    "exchange": {
+        "name": "kraken",
+        "pair_whitelist": [
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT",
+            "XRP/USDT",
+            "ADA/USDT",
+            "DOGE/USDT",
+            "AVAX/USDT",
+            "DOT/USDT",
+            "LINK/USDT",
+            "LTC/USDT",
+            "ATOM/USDT"
+        ]
+    },
+    "pairlists": [
+        {
+            "method": "StaticPairList"
+        }
+    ],
+    
+    "freqai": {
+        "enabled": true,
+        "purge_old_models": true,
+        "save_backtest_models": false,
+        "identifier": "grid_dca_freqai",
+        "feature_parameters": {
+            "preroll_backtests": 100,
+            "label_period_candles": 3,
+            "include_corr_pairlist": ["BTC/USDT"],
+            "indicator_periods_candles": [10, 20, 30],
+            "include_timeframes": ["15m"],
+            "feature_buffers": {
+                "rsi": {"lookback": 14},
+                "volume": {"lookback": 20},
+                "atr": {"lookback": 14}
+            },
+            "DI_threshold": 0,
+            "weight_factor": 0.9,
+            "principal_component_analysis": false,
+            "use_SVM_to_remove_outliers": true,
+            "svm_params": {"shuffle": true, "shuffle_bits": 2},
+            "noise_tolerance": 0.05
+        },
+        "data_split_parameters": {
+            "test_size": 0.33
+        },
+        "model_training_parameters": {
+            "n_estimators": 100,
+            "max_depth": 5,
+            "random_state": 42
+        },
+        "model_save_type": "lightgbm",
+        "retrain_interval": 4,
+        "train_after_initial_inference": true
+    },
+    
+    "api_server": {
+        "enabled": true,
+        "listen_ip_address": "0.0.0.0",
+        "listen_port": 8080,
+        "username": "",
+        "password": "",
+        "allowed_cors_origins": ["*"]
+    }
+}
