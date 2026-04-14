@@ -1,0 +1,108 @@
+{
+  "max_open_trades": 3,
+  "stake_currency": "USDT",
+  "stake_amount": 100,
+  "tradable_balance_ratio": 0.99,
+  "fiat_display_currency": "USD",
+  "dry_run": true,
+  "dry_run_wallet": 1000,
+  "cancel_open_orders_on_exit": false,
+  "unfilledtimeout": {
+    "entry": 10,
+    "exit": 10,
+    "exit_timeout_count": 12
+  },
+  "entry_pricing": {
+    "price_side": "same",
+    "use_order_book": true,
+    "order_book_top": 1,
+    "price_last_balance": 0.0,
+    "check_depth_of_market": {
+      "asks_orderbook_min": 1,
+      "bids_orderbook_max": 1
+    }
+  },
+  "exit_pricing": {
+    "price_side": "same",
+    "use_order_book": true,
+    "order_book_top": 1
+  },
+  "exchange": {
+    "name": "kraken",
+    "key": "",
+    "secret": "",
+    "ccxt_config": {},
+    "ccxt_async_config": {},
+    "pair_whitelist": [
+      "BTC/USDT"
+    ],
+    "pair_blacklist": []
+  },
+  "pairlists": [
+    {
+      "method": "StaticPairList"
+    }
+  ],
+  "telegram": {
+    "enabled": false,
+    "token": "",
+    "chat_id": ""
+  },
+  "api_server": {
+    "enabled": true,
+    "listen_ip_address": "0.0.0.0",
+    "listen_port": 7077,
+    "verbosity": "error",
+    "enable_openapi": true,
+    "jwt_secret_key": "somethingrandom",
+    "ws_token": "somethingrandom",
+    "CORS_origins": [],
+    "username": "freqtrader",
+    "password": "freqtrader"
+  },
+  "bot_name": "freqtrade_griddca",
+  "strategy": "GridDCA",
+  "db_url": "sqlite:///user_data/tradesv3.dryrun.sqlite",
+  "user_data_dir": "user_data",
+  "timeframe": "15m",
+  "stoploss": -0.1,
+  "trailing_stop": false,
+  "trailing_stop_positive": 0.01,
+  "trailing_stop_positive_offset": 0.02,
+  "trailing_only_offset_is_reached": false,
+  "initial_state": "running",
+  "force_entry_enable": false,
+  "internals": {
+    "process_only_new_candles": false
+  },
+  "strategy_params": {
+    "rsi_oversold": 28,
+    "rsi_overbought": 72,
+    "take_profit_pct": 2.0,
+    "freqai_train_period": 90,
+    "freqai_backtest_period": 7,
+    "stop_loss": -0.05,
+    "take_profit": 0.03
+  },
+  "freqai": {
+    "enabled": true,
+    "purge_old_models": true,
+    "save_metadata": true,
+    "identifier": "lightgbm",
+    "train_period_days": 90,
+    "backtest_period_days": 7,
+    "feature_parameters": {
+      "feature_buffers": {
+        "rsi": {
+          "lookback": 14
+        },
+        "volume": {
+          "lookback": 20
+        },
+        "atr": {
+          "lookback": 14
+        }
+      }
+    }
+  }
+}

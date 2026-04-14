@@ -1,0 +1,93 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Next.js
+.next/
+out/
+dashboard/.next/
+
+# Production
+dashboard/dist/
+dashboard/build/
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+
+# Logs
+user_data/logs/
+*.log
+
+# FreqAI models (large files)
+user_data/models/*.pkl
+user_data/models/*.joblib
+
+# Backtest results
+user_data/backtest_results/
+data/results/*.json
+
+# Docker volumes (when running locally)
+docker-volumes/
+
+# Freqtrade runtime config backups
+config/*.backup.*
+
+# Obsidian vault data (runtime only)
+data/obsidian_vault/
+
+# Docker data
+data/dashboard.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db

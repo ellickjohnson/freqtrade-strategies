@@ -1,0 +1,72 @@
+services:
+  # Next.js Dashboard
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_PATH=/data/dashboard.db
+      - FREQTRADE_MANAGER_URL=ws://manager:8765
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8765
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    volumes:
+      - ./data:/data:rw
+      - "/home/ejohnson/Documents/Obsidian Vault:/data/obsidiain_vault:rw"
+      - ./user_data:/user_data:ro
+      - ./config:/freqtrade/configs:ro
+      - ./strategies:/strategies:ro
+    depends_on:
+      - manager
+    networks:
+      - freqtrade-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://0.0.0.0:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Freqtrade Manager Service
+  manager:
+    build:
+      context: ./freqtrade_manager
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+      - "8765:8765"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/configs
+      - ./strategies:/strategies:ro
+      - ./user_data:/user_data
+      - ./data:/data
+      - ./templates:/templates:ro
+    environment:
+      - FREQTRADE_IMAGE=freqtradeorg/freqtrade:stable
+      - LOG_LEVEL=INFO
+      - MANAGER_PORT=8765
+      - DATABASE_PATH=/data/dashboard.db
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - BASE_PORT=7070
+      - HOST_PROJECT_ROOT=/home/ejohnson/workspace/github/ellickjohnson/freqtrade-strategies
+    networks:
+      - freqtrade-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  freqtrade-net:
+    driver: bridge
+
+volumes:
+  user-data:
+  dashboard-data:

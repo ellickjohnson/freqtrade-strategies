@@ -1,0 +1,60 @@
+version: '3.9'
+
+services:
+  # Development mode with hot reload
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - DATABASE_PATH=/data/dashboard.db
+      - FREQTRADE_MANAGER_URL=ws://manager:8765
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8765
+      - NEXT_PUBLIC_API_URL=http://localhost:3000/api
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    volumes:
+      - ./dashboard:/app
+      - ./dashboard/package.json:/app/package.json
+      - ./dashboard/package-lock.json:/app/package-lock.json
+      - /app/node_modules
+      - ./data:/data:ro
+      - ./user_data:/user_data:ro
+      - ./config:/freqtrade/configs:ro
+      - ./strategies:/strategies:ro
+    depends_on:
+      - manager
+    networks:
+      - freqtrade-net
+
+  # Manager in development mode
+  manager:
+    build:
+      context: ./freqtrade_manager
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8765:8765"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./freqtrade_manager:/app
+      - ./config:/configs
+      - ./strategies:/strategies:ro
+      - ./user_data:/user_data
+      - ./data:/data
+      - ./templates:/templates:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FREQTRADE_IMAGE=freqtradeorg/freqtrade:stable
+      - LOG_LEVEL=DEBUG
+      - MANAGER_PORT=8765
+      - DATABASE_PATH=/data/dashboard.db
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - BASE_PORT=7070
+    networks:
+      - freqtrade-net
+
+networks:
+  freqtrade-net:
+    driver: bridge

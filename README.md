@@ -1,6 +1,18 @@
-# Freqtrade Trading Strategies
+# Freqtrade Strategy Dashboard
 
-A collection of Freqtrade trading strategies with learning-focused documentation. These strategies are designed to be transparent, explaining WHY trades happen so you can learn from every decision.
+A modern, real-time engineering dashboard for managing multiple Freqtrade trading strategies with FreqAI insights, backtesting controls, and comprehensive monitoring.
+
+## Overview
+
+This repository contains:
+- **8 Trading Strategies** - GridDCA, OscillatorConfluence, ScalpingQuick, BreakoutMomentum, TrendMomentum (plus FreqAI-enhanced versions)
+- **Engineering Dashboard** - Next.js + Python FastAPI for managing multiple strategies
+- **Real-Time Monitoring** - WebSocket-based live updates for trades, logs, and status
+- **FreqAI Explainability** - See why AI models make predictions with feature importance
+- **Backtesting Hub** - Interactive backtest configuration with parameter tuning
+- **Slack Notifications** - Rich notifications for starts, stops, trades, and errors
+
+All strategies are learning-focused, explaining WHY trades happen so you can understand every decision.
 
 ## Strategies
 
