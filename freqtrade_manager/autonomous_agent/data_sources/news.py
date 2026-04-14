@@ -76,7 +76,11 @@ class CryptoCompareSource(NewsSource):
                     data = await response.json()
                     news_items = []
 
-                    for item in data.get("Data", [])[:limit]:
+                    raw_data = data.get("Data", [])
+                    if not isinstance(raw_data, list):
+                        raw_data = []
+
+                    for item in raw_data[:limit]:
                         news_items.append(NewsItem(
                             title=item.get("title", ""),
                             source=item.get("source", "unknown"),

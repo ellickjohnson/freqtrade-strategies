@@ -6,6 +6,7 @@ Add these routes to freqtrade_manager/main.py
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
@@ -36,11 +37,25 @@ def setup_autonomous_routes(app, db, manager, ws_server):
     db_path = "/data/dashboard.db"
     kg = KnowledgeGraph(db_path)
 
+    # Configure LLM from environment
+    llm_provider_str = os.getenv("LLM_PROVIDER", "ollama").lower()
+    llm_provider = LLMProvider.OLLAMA  # default
+    if llm_provider_str == "anthropic":
+        llm_provider = LLMProvider.ANTHROPIC
+    elif llm_provider_str == "openai":
+        llm_provider = LLMProvider.OPENAI
+    elif llm_provider_str == "ollama":
+        llm_provider = LLMProvider.OLLAMA
+
+    llm_model = os.getenv("LLM_MODEL", "qwen3.5:latest" if llm_provider == LLMProvider.OLLAMA else "claude-sonnet-4-6")
+
     llm_config = LLMConfig(
-        provider=LLMProvider.ANTHROPIC,  # Will use ANTHROPIC_API_KEY env var
-        model="claude-sonnet-4-6",
+        provider=llm_provider,
+        model=llm_model,
+        base_url=os.getenv("OLLAMA_BASE_URL"),
     )
     llm_client = LLMClient(llm_config)
+    logger.info(f"LLM configured: provider={llm_provider_str}, model={llm_model}")
 
     hyperopt_config = HyperoptConfig(
         user_data_dir="/user_data",
@@ -80,6 +95,22 @@ def setup_autonomous_routes(app, db, manager, ws_server):
 
     # Store Obsidian memory reference
     orchestrator.obsidian_memory = get_obsidian_memory()
+
+    # Auto-start if configured
+    # We schedule a delayed start so it runs after the event loop is fully up
+    autostart = os.getenv("AUTOSTART_AUTONOMOUS", "true").lower() in ("true", "1", "yes")
+    if autostart:
+        async def _delayed_autostart():
+            await asyncio.sleep(2)  # Wait for full app startup
+            if orchestrator and not orchestrator.running:
+                asyncio.create_task(orchestrator.start())
+                logger.info("Autonomous agent auto-started")
+        # Schedule the delayed start using a background thread trick
+        # since we're not in an async context at module load time
+        orchestrator._autostart_requested = True
+        logger.info("Autonomous agent auto-start scheduled")
+    else:
+        logger.info("Autonomous agent auto-start disabled (AUTOSTART_AUTONOMOUS=false)")
 
     # ==================== Autonomous Control ====================
 

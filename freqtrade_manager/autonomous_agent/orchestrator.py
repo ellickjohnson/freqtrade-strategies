@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Callable
 
-from .llm_client import LLMClient, LLMConfig
+from .llm_client import LLMClient, LLMConfig, LLMProvider
 from .knowledge_graph import (
     KnowledgeGraph,
     AgentDecision,
@@ -99,6 +99,7 @@ class OrchestratorAgent:
         self.db_path = db_path
         self.kg = KnowledgeGraph(db_path)
         self.llm = llm_client or LLMClient(LLMConfig(
+            provider=LLMProvider(self.config.llm_provider) if isinstance(self.config.llm_provider, str) else self.config.llm_provider,
             model=self.config.llm_model,
         ))
         self.strategy_manager = strategy_manager
@@ -418,10 +419,22 @@ Important:
                 return {"decision": decision.to_dict(), "status": "success", "action": "parameters_adjusted"}
 
             elif decision_type == "run_hyperopt":
-                # Schedule hyperopt
-                # This would call the hyperopt executor
-                self.kg.update_decision_outcome(decision.id, "hyperopt_scheduled")
-                return {"decision": decision.to_dict(), "status": "success", "action": "hyperopt_scheduled"}
+                # Schedule hyperopt via HyperoptExecutor
+                if hasattr(self, 'hyperopt_executor') and self.hyperopt_executor:
+                    from .hyperopt_executor import HyperoptConfig
+                    hyperopt_config = HyperoptConfig(
+                        epochs=params.get("epochs", 100),
+                        spaces=params.get("spaces", ["buy", "sell", "roi", "stoploss"]),
+                        timerange=params.get("timerange", "20240101-"),
+                        strategy_path=target,
+                        config_path=params.get("config_path"),
+                    )
+                    asyncio.create_task(self.hyperopt_executor.run_hyperopt(hyperopt_config))
+                    self.kg.update_decision_outcome(decision.id, "hyperopt_scheduled")
+                    return {"decision": decision.to_dict(), "status": "success", "action": "hyperopt_scheduled"}
+                else:
+                    self.kg.update_decision_outcome(decision.id, "hyperopt_skipped_no_executor")
+                    return {"decision": decision.to_dict(), "status": "skipped", "action": "hyperopt_skipped_no_executor"}
 
             elif decision_type == "apply_research":
                 # Apply research findings

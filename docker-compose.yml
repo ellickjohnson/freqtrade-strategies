@@ -16,7 +16,7 @@ services:
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     volumes:
       - ./data:/data:rw
-      - "/home/ejohnson/Documents/Obsidian Vault:/data/obsidiain_vault:rw"
+      - "/home/ejohnson/Documents/Obsidian Vault:/data/obsidian_vault:rw"
       - ./user_data:/user_data:ro
       - ./config:/freqtrade/configs:ro
       - ./strategies:/strategies:ro
@@ -46,19 +46,36 @@ services:
       - ./user_data:/user_data
       - ./data:/data
       - ./templates:/templates:ro
+    env_file:
+      - .env
     environment:
       - FREQTRADE_IMAGE=freqtradeorg/freqtrade:stable
       - LOG_LEVEL=INFO
       - MANAGER_PORT=8765
       - DATABASE_PATH=/data/dashboard.db
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
       - BASE_PORT=7070
       - HOST_PROJECT_ROOT=/home/ejohnson/workspace/github/ellickjohnson/freqtrade-strategies
+      # LLM Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen3.5:latest}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Data Source API Keys
+      - FRED_API_KEY=${FRED_API_KEY:-}
+      - CRYPTOCOMPARE_API_KEY=${CRYPTOCOMPARE_API_KEY:-}
+      - NEWSAPI_KEY=${NEWSAPI_KEY:-}
+      - SANTIMENT_API_KEY=${SANTIMENT_API_KEY:-}
+      # Exchange Configuration
+      - EXCHANGE_ID=${EXCHANGE_ID:-binance}
+      # Autonomous Agent
+      - AUTOSTART_AUTONOMOUS=${AUTOSTART_AUTONOMOUS:-true}
+      - OBSIDIAN_VAULT_PATH=/data/obsidian_vault
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - freqtrade-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8765/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3

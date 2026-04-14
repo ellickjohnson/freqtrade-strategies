@@ -330,17 +330,21 @@ class OllamaProvider(BaseLLMProvider):
             "model": self.config.model,
             "prompt": prompt,
             "system": system_prompt or "",
+            "stream": False,
             "options": {
                 "num_predict": max_tokens,
                 "temperature": temperature,
             },
         }
 
+        # Use extended timeout for thinking/reasoning models
+        timeout = aiohttp.ClientTimeout(total=max(self.config.timeout_seconds, 300))
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.base_url}/api/generate",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.config.timeout_seconds),
+                timeout=timeout,
             ) as response:
                 result = await response.json()
 

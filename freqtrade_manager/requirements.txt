@@ -16,3 +16,4 @@ python-json-logger==2.0.7
 schedule==1.2.0
 watchdog==3.0.0
 numpy>=1.24.0
+ccxt>=4.0.0

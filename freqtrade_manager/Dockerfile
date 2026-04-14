@@ -14,6 +14,6 @@ COPY . .
 
 RUN mkdir -p /data /user_data/configs /strategies
 
-EXPOSE 8765
+EXPOSE 8000 8765
 
 CMD ["python", "main.py"]

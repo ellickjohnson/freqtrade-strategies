@@ -7,7 +7,7 @@ Each source has graceful fallback to mock data when API keys are missing.
 
 from .news import NewsSource, CryptoCompareSource, NewsAPISource
 from .sentiment import SentimentSource, RedditSource, LunarCrushSource
-from .onchain import OnChainSource, GlassnodeSource
+from .onchain import OnChainSource, FreeOnChainSource, BlockchainComSource, SantimentSource, MempoolSpaceSource
 from .macro import MacroSource, FREDSource
 
 __all__ = [
@@ -18,7 +18,10 @@ __all__ = [
     "RedditSource",
     "LunarCrushSource",
     "OnChainSource",
-    "GlassnodeSource",
+    "FreeOnChainSource",
+    "BlockchainComSource",
+    "SantimentSource",
+    "MempoolSpaceSource",
     "MacroSource",
     "FREDSource",
 ]

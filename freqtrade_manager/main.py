@@ -90,6 +90,11 @@ async def lifespan(app: FastAPI):
 
     ws_task = asyncio.create_task(ws_server.start())
 
+    # Auto-start autonomous agent if requested
+    if autonomous_orchestrator and getattr(autonomous_orchestrator, '_autostart_requested', False):
+        asyncio.create_task(autonomous_orchestrator.start())
+        logger.info("Autonomous agent auto-started")
+
     logger.info("Freqtrade Manager started successfully")
 
     yield
