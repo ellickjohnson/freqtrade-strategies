@@ -244,10 +244,12 @@ class OrchestratorAgent:
         from .risk_agent import RiskAgent
 
         if not self._risk_agent:
+            from .risk_agent import RiskLimits
+            risk_config = RiskLimits()
             self._risk_agent = RiskAgent(
                 db_path=self.db_path,
                 knowledge_graph=self.kg,
-                config=self.config,
+                config=risk_config,
             )
 
         report = await self._risk_agent.check_portfolio_risk(
@@ -487,48 +489,81 @@ Important:
             return {"decision": decision.to_dict(), "status": "error", "error": str(e)}
 
     def _build_decision_context(self) -> str:
-        """Build context string for LLM decision-making."""
+        """Build compact context string for LLM decision-making (optimized for small models)."""
         context_parts = []
 
-        # Portfolio summary
-        context_parts.append("## Portfolio Summary")
-        context_parts.append(json.dumps(self.context.portfolio_summary, indent=2, default=str))
+        # Portfolio summary - compact key metrics only
+        ps = self.context.portfolio_summary or {}
+        context_parts.append("## Portfolio")
+        if isinstance(ps, dict):
+            for k in ["total_value", "total_pnl", "pnl_pct", "open_positions"]:
+                if k in ps:
+                    context_parts.append(f"- {k}: {ps[k]}")
+        else:
+            context_parts.append(str(ps)[:200])
 
-        # Strategy statuses
-        context_parts.append("\n## Strategy Statuses")
-        for strategy in self.context.strategies:
-            context_parts.append(f"\n### {strategy.get('name', strategy['id'][:8])}")
-            context_parts.append(f"- Status: {strategy.get('status', 'unknown')}")
-            context_parts.append(f"- Win Rate: {strategy.get('win_rate', 'N/A')}")
-            context_parts.append(f"- Sharpe: {strategy.get('sharpe', 'N/A')}")
+        # Strategy statuses - one line each
+        if self.context.strategies:
+            context_parts.append("\n## Strategies")
+            for s in self.context.strategies[:5]:
+                name = s.get('name', s.get('id', '?')[:8])
+                status = s.get('status', '?')
+                wr = s.get('win_rate', 'N/A')
+                sharpe = s.get('sharpe', 'N/A')
+                context_parts.append(f"- {name}: {status}, WR={wr}, Sharpe={sharpe}")
 
-        # Research findings
+        # Research findings - top 3, one line each
         if self.context.research_findings:
-            context_parts.append("\n## Recent Research Findings")
-            for finding in self.context.research_findings[:5]:
-                context_parts.append(f"- [{finding['source']}] {finding['title']}: {finding['content'][:100]}")
+            context_parts.append("\n## Research")
+            for f in self.context.research_findings[:3]:
+                src = f.get('source', '?')
+                title = f.get('title', '')[:60]
+                context_parts.append(f"- [{src}] {title}")
 
-        # Risk report
+        # Risk assessment - compact summary
         if self.context.risk_report:
-            context_parts.append("\n## Risk Assessment")
-            context_parts.append(json.dumps(self.context.risk_report, indent=2, default=str))
+            context_parts.append("\n## Risk")
+            rr = self.context.risk_report
+            if isinstance(rr, dict):
+                score = rr.get('overall_risk_score', rr.get('risk_score', '?'))
+                level = rr.get('risk_level', '?')
+                context_parts.append(f"- Score: {score}, Level: {level}")
+                alerts = rr.get('alerts', [])
+                if alerts:
+                    for a in alerts[:3]:
+                        context_parts.append(f"- Alert: {str(a)[:80]}")
+            else:
+                context_parts.append(str(rr)[:200])
 
-        # Analysis results
+        # Analysis results - regime + key metrics only
         if self.context.analysis_results:
-            context_parts.append("\n## Analysis Results")
-            context_parts.append(json.dumps(self.context.analysis_results, indent=2, default=str))
+            context_parts.append("\n## Analysis")
+            ar = self.context.analysis_results
+            if isinstance(ar, dict):
+                regime = ar.get('regime', ar.get('market_regime', {}))
+                if isinstance(regime, dict):
+                    context_parts.append(f"- Regime: {regime.get('type', regime.get('regime', '?'))}")
+                    context_parts.append(f"- Confidence: {regime.get('confidence', '?')}")
+                recs = ar.get('recommendations', [])
+                if recs:
+                    for r in recs[:2]:
+                        context_parts.append(f"- Rec: {str(r)[:80]}")
+            else:
+                context_parts.append(str(ar)[:200])
 
-        # Recent decisions
+        # Recent decisions - last 3
         if self.context.recent_decisions:
-            context_parts.append("\n## Recent Decisions (24h)")
-            for dec in self.context.recent_decisions[-5:]:
-                context_parts.append(f"- {dec['decision_type']}: {dec['conclusion'][:100]}")
+            context_parts.append("\n## Recent Decisions")
+            for dec in self.context.recent_decisions[-3:]:
+                dtype = dec.get('decision_type', '?')
+                conc = dec.get('conclusion', '')[:60]
+                context_parts.append(f"- {dtype}: {conc}")
 
-        # Errors
+        # Errors - last 2
         if self.context.errors:
             context_parts.append("\n## Errors")
-            for error in self.context.errors:
-                context_parts.append(f"- {error}")
+            for error in self.context.errors[:2]:
+                context_parts.append(f"- {str(error)[:80]}")
 
         return "\n".join(context_parts)
 

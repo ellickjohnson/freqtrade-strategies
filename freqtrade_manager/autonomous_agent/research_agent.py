@@ -579,8 +579,10 @@ What does this mean for crypto markets?"""
 
     def _store_finding(self, finding: Dict):
         """Store research finding in knowledge graph."""
+        import uuid
+        finding_id = finding.get("id") or f"finding_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         research_finding = ResearchFinding(
-            id=finding.get("id", f"finding_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"),
+            id=finding_id,
             source=finding.get("source", "unknown"),
             finding_type=finding.get("finding_type", "general"),
             title=finding.get("title", ""),

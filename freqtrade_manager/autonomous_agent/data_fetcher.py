@@ -173,30 +173,51 @@ class DataFetcher:
         timeframe: str,
         limit: int,
     ) -> Optional[np.ndarray]:
-        """Fetch OHLCV from exchange via ccxt async."""
+        """Fetch OHLCV from exchange via ccxt async. Tries fallback exchanges if primary fails."""
+        # Try primary exchange first, then fallbacks for geo-restrictions
+        exchanges_to_try = [self.exchange_id]
+        if self.exchange_id in ("binance", "binanceus"):
+            exchanges_to_try.extend(["gate", "mexc", "kucoin", "bybit"])
+
         async with self._ccxt_lock:
-            exchange = self._get_ccxt_exchange()
-            if exchange is None:
-                return None
+            for exchange_name in exchanges_to_try:
+                try:
+                    exchange = self._get_ccxt_exchange()
+                    if exchange is None:
+                        # Try creating exchange with alternate name
+                        import ccxt.async_support as ccxt_async
+                        exchange_class = getattr(ccxt_async, exchange_name, None)
+                        if exchange_class is None:
+                            continue
+                        exchange = exchange_class({"enableRateLimit": True, "options": {"defaultType": "spot"}})
 
-            try:
-                ohlcv = await exchange.fetch_ohlcv(pair, timeframe, limit=limit)
-                if not ohlcv:
-                    return None
+                    ohlcv = await exchange.fetch_ohlcv(pair, timeframe, limit=limit)
+                    if not ohlcv:
+                        continue
 
-                # ccxt returns [[timestamp, open, high, low, close, volume], ...]
-                data = np.array([
-                    [candle[1], candle[2], candle[3], candle[4], candle[5]]
-                    for candle in ohlcv
-                    if len(candle) >= 6
-                ], dtype=np.float64)
+                    # ccxt returns [[timestamp, open, high, low, close, volume], ...]
+                    data = np.array([
+                        [candle[1], candle[2], candle[3], candle[4], candle[5]]
+                        for candle in ohlcv
+                        if len(candle) >= 6
+                    ], dtype=np.float64)
 
-                logger.info(f"Fetched {len(data)} candles for {pair} from {self.exchange_id}")
-                return data if len(data) > 0 else None
+                    if len(data) > 0:
+                        logger.info(f"Fetched {len(data)} candles for {pair} from {exchange_name}")
+                        # Update primary exchange if fallback worked
+                        if exchange_name != self.exchange_id:
+                            self.exchange_id = exchange_name
+                        return data
 
-            except Exception as e:
-                logger.error(f"ccxt fetch_ohlcv failed for {pair}: {e}")
-                return None
+                except Exception as e:
+                    err_str = str(e)
+                    if "451" in err_str or "restricted" in err_str.lower():
+                        logger.warning(f"Exchange {exchange_name} geo-restricted, trying fallback")
+                        continue
+                    logger.error(f"ccxt fetch_ohlcv failed for {pair} on {exchange_name}: {e}")
+                    continue
+
+            return None
 
     def _get_from_exchange_sync(
         self,

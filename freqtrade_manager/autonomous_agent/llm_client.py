@@ -39,7 +39,7 @@ class LLMConfig:
     model: str = "claude-sonnet-4-6"
     api_key: Optional[str] = None
     base_url: Optional[str] = None
-    max_tokens: int = 4096
+    max_tokens: int = 1024
     temperature: float = 0.7
     timeout_seconds: int = 300
 
@@ -48,8 +48,8 @@ class LLMConfig:
     tokens_per_day: int = 500000
 
     # Retry settings
-    max_retries: int = 3
-    retry_delay_seconds: int = 1
+    max_retries: int = 2
+    retry_delay_seconds: int = 2
 
 
 @dataclass
@@ -326,30 +326,40 @@ class OllamaProvider(BaseLLMProvider):
     ) -> LLMResponse:
         import aiohttp
 
+        # Use /api/chat for better multi-turn support and context management
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
             "model": self.config.model,
-            "prompt": prompt,
-            "system": system_prompt or "",
+            "messages": messages,
             "stream": False,
             "options": {
                 "num_predict": max_tokens,
+                "num_ctx": min(max_tokens * 4, 8192),  # Limit context window for speed
                 "temperature": temperature,
             },
         }
 
-        # Use extended timeout for thinking/reasoning models
-        timeout = aiohttp.ClientTimeout(total=max(self.config.timeout_seconds, 600))
+        # Use timeout from config (default 300s)
+        timeout = aiohttp.ClientTimeout(total=self.config.timeout_seconds)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{self.base_url}/api/generate",
+                f"{self.base_url}/api/chat",
                 json=payload,
                 timeout=timeout,
             ) as response:
                 result = await response.json()
 
+        content = ""
+        if result.get("message") and result.get("message", {}).get("content"):
+            content = result["message"]["content"]
+
         return LLMResponse(
-            content=result.get("response", ""),
+            content=content or result.get("response", ""),
             model=self.config.model,
             usage={
                 "input_tokens": result.get("prompt_eval_count", 0),

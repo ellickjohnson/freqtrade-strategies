@@ -416,6 +416,8 @@ class RiskAgent:
                 "portfolio_drawdown": report.portfolio_drawdown,
                 "total_exposure": report.total_exposure,
                 "risk_score": report.risk_score,
+                "alerts": len(report.alerts),
+                "recommendations": report.recommendations,
             },
             reasoning_chain=[
                 f"Portfolio drawdown: {report.portfolio_drawdown:.2f}%",
@@ -425,10 +427,6 @@ class RiskAgent:
             ],
             conclusion=f"Risk check: {'CRITICAL' if report.circuit_breaker_triggered else 'OK'}",
             confidence=0.95,
-            metadata={
-                "alerts": len(report.alerts),
-                "recommendations": report.recommendations,
-            },
         )
 
         self.kg.log_decision(decision)

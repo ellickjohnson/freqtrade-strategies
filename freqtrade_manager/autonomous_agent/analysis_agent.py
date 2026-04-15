@@ -435,8 +435,10 @@ Determine:
     ) -> Optional[TechnicalIndicators]:
         """Get technical indicators for a trading pair."""
         try:
-            # Get OHLCV data
-            ohlcv = self.data_fetcher.get_ohlcv(pair, timeframe, limit=200)
+            # Try async exchange fetch first, fall back to sync (cache/db)
+            ohlcv = await self.data_fetcher.get_ohlcv_async(pair, timeframe, limit=200)
+            if ohlcv is None:
+                ohlcv = self.data_fetcher.get_ohlcv(pair, timeframe, limit=200)
 
             if ohlcv is None or len(ohlcv) < 50:
                 logger.warning(f"Insufficient OHLCV data for {pair}")
@@ -556,7 +558,7 @@ Include specific parameter changes when recommending adjustments."""
                 "type": "strategy_analysis",
                 "results": results,
                 "strategy_count": len(results.get("strategies", {})),
-                "market_regime": results.get("market_regime", {}).get("regime_type"),
+                "market_regime": (results.get("market_regime") or {}).get("regime_type"),
             },
             tags=["analysis", "automated"],
         )

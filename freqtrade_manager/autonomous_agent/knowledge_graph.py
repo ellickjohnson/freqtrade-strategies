@@ -479,12 +479,12 @@ class KnowledgeGraph:
     # ==================== Research Finding Operations ====================
 
     def add_finding(self, finding: ResearchFinding) -> str:
-        """Add a research finding."""
+        """Add a research finding. Uses INSERT OR REPLACE to handle duplicates."""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
         c.execute("""
-            INSERT INTO research_findings
+            INSERT OR REPLACE INTO research_findings
             (id, source, finding_type, title, content, sentiment, relevance,
              impact_assessment, entities, confidence, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
