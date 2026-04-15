@@ -68,6 +68,7 @@ services:
       - EXCHANGE_ID=${EXCHANGE_ID:-binance}
       # Autonomous Agent
       - AUTOSTART_AUTONOMOUS=${AUTOSTART_AUTONOMOUS:-true}
+      - AUTO_APPLY_IMPROVEMENTS=${AUTO_APPLY_IMPROVEMENTS:-true}
       - OBSIDIAN_VAULT_PATH=/data/obsidian_vault
     extra_hosts:
       - "host.docker.internal:host-gateway"

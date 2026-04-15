@@ -68,7 +68,7 @@ def setup_autonomous_routes(app, db, manager, ws_server):
 
     orchestrator_config = OrchestratorConfig(
         interval_minutes=5,
-        auto_apply_improvements=False,  # Require approval by default
+        auto_apply_improvements=os.getenv("AUTO_APPLY_IMPROVEMENTS", "true").lower() in ("true", "1", "yes"),
         paper_trading_only=True,
     )
 

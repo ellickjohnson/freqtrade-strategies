@@ -42,7 +42,7 @@ class OrchestratorConfig:
     interval_minutes: int = 5
     max_concurrent_research: int = 3
     min_improvement_threshold: float = 5.0
-    auto_apply_improvements: bool = False  # Require approval by default
+    auto_apply_improvements: bool = True  # Auto-apply safe decisions; high-risk ones still require approval
     paper_trading_only: bool = True
 
     # Risk limits
@@ -125,6 +125,9 @@ class OrchestratorAgent:
         self.running = True
         logger.info("Starting orchestrator agent")
 
+        # Ensure existing strategies are running
+        await self._ensure_strategies_running()
+
         while self.running:
             try:
                 await self._run_cycle()
@@ -135,6 +138,25 @@ class OrchestratorAgent:
 
             # Wait for next cycle
             await asyncio.sleep(self.config.interval_minutes * 60)
+
+    async def _ensure_strategies_running(self):
+        """Auto-start any strategies that should be running but have stopped containers."""
+        if not self.strategy_manager:
+            return
+
+        try:
+            strategies = await self.strategy_manager.get_all_strategies()
+            for s in strategies:
+                if s.get("enabled") and s.get("status") == "running":
+                    container_status = (s.get("container_status") or {}).get("status", "unknown")
+                    if container_status in ("exited", "dead", "unknown", None):
+                        logger.info(f"Auto-starting strategy: {s['name']} (container was {container_status})")
+                        try:
+                            await self.strategy_manager.start_strategy(s["id"])
+                        except Exception as e:
+                            logger.warning(f"Failed to auto-start {s['name']}: {e}")
+        except Exception as e:
+            logger.warning(f"Strategy auto-start check failed: {e}")
 
     def stop(self):
         """Stop the orchestration loop."""
@@ -303,34 +325,15 @@ class OrchestratorAgent:
 
         try:
             response = await self.llm.analyze(
-                prompt=context_str,
+                prompt=context_str + "\n\nRespond with JSON: {\"decisions\": [{\"decision_type\": \"...\", \"reasoning\": \"...\", \"confidence\": 0.5, \"target\": \"...\", \"parameters\": {}}]}",
                 schema=decision_schema,
-                system_prompt="""You are an autonomous financial engineering agent making portfolio decisions.
-
-Your goal is to maximize risk-adjusted returns while respecting safety limits.
-
-Available actions:
-1. adjust_parameters - Adjust strategy parameters based on research
-2. run_hyperopt - Schedule hyperopt optimization
-3. apply_research - Apply research findings to strategies
-4. create_strategy - Create new strategy from template
-5. stop_strategy - Stop a running strategy
-6. deprecate_strategy - Deprecate poor performing strategy
-7. alert_user - Send notification for critical events
-8. no_action - No action needed
-
-For each decision, provide:
-- Clear reasoning based on the context
-- Confidence level (0-1)
-- Whether approval is needed
-- Priority level
-
-Important:
-- Paper trading only by default
-- Never exceed risk limits
-- Prioritize capital preservation
-- Apply improvements with >5% expected gain only""",
+                system_prompt="You are an autonomous trading agent. Respond ONLY with valid JSON matching the schema. No markdown, no explanation, just the JSON object.",
             )
+
+            if response and "decisions" in response:
+                logger.info(f"LLM returned {len(response['decisions'])} decisions")
+            else:
+                logger.info(f"LLM returned no valid decisions (response keys: {list(response.keys()) if response else 'None'})")
 
             if response and "decisions" in response:
                 for decision_data in response["decisions"]:
@@ -364,31 +367,90 @@ Important:
             logger.error(f"Decision generation failed: {e}")
             self.context.errors.append(f"Decision generation failed: {e}")
 
+        # If no strategies are running, create one proactively
+        active_strategies = [s for s in self.context.strategies if s.get("enabled") and s.get("status") == "running"]
+        if not active_strategies and self.strategy_manager:
+            template = self._select_strategy_template()
+            if template:
+                logger.info(f"No active strategies — creating {template} proactively")
+                decision = AgentDecision(
+                    id=f"dec_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_create_{template}",
+                    agent_type="orchestrator",
+                    decision_type="create_strategy",
+                    context={"reason": "No active strategies — auto-creating to begin trading"},
+                    reasoning_chain=["No active strategies detected", f"Selected template: {template}", "Creating in dry_run mode"],
+                    conclusion=f"Create {template} strategy to start paper trading",
+                    confidence=0.8,
+                    requires_approval=False,
+                    action_taken=None,
+                )
+                decision.metadata = {
+                    "priority": "high",
+                    "target": template,
+                    "parameters": {"template_id": template, "dry_run": True},
+                }
+                decisions.append(decision)
+                self.kg.log_decision(decision)
+
         return decisions
 
+    def _select_strategy_template(self) -> str:
+        """Select the best strategy template based on current market regime."""
+        # Default to scalping for range-bound markets
+        # Use analysis results if available
+        regime = "ranging"  # safe default
+        if self.context.analysis_results and isinstance(self.context.analysis_results, dict):
+            regime_data = self.context.analysis_results.get("market_regime", {})
+            if isinstance(regime_data, dict):
+                regime = regime_data.get("regime_type", regime_data.get("regime", "ranging"))
+
+        template_map = {
+            "trending_up": "breakout_momentum",
+            "trending_down": "grid_dca",
+            "ranging": "scalping_quick",
+            "volatile": "oscillator_confluence",
+        }
+        return template_map.get(regime, "scalping_quick")
+
     async def _execute_decisions(self, decisions: List[AgentDecision]) -> List[Dict]:
-        """Execute approved decisions."""
+        """Execute decisions with safety guardrails."""
+        # Decision types that can be auto-applied (low risk)
+        AUTO_APPLY_TYPES = {"adjust_parameters", "run_hyperopt", "apply_research", "create_strategy", "alert_user"}
+        # Decision types that always require approval (high risk)
+        REQUIRES_APPROVAL_TYPES = {"stop_strategy", "deprecate_strategy"}
+
         executed = []
 
         for decision in decisions:
             try:
-                # Check if approval is needed
-                if decision.requires_approval and not self.config.auto_apply_improvements:
-                    # Store for user approval
-                    logger.info(f"Decision {decision.id} requires approval")
+                # Check if this decision type requires human approval
+                needs_approval = decision.decision_type in REQUIRES_APPROVAL_TYPES
+                if needs_approval:
+                    logger.info(f"Decision {decision.id} ({decision.decision_type}) requires approval")
                     executed.append({
                         "decision": decision.to_dict(),
                         "status": "pending_approval",
                         "message": f"Action requires approval: {decision.decision_type}",
                     })
-
-                    # Send notification
                     if self.notification_callback:
                         await self.notification_callback({
                             "type": "approval_required",
                             "decision": decision.to_dict(),
                         })
                     continue
+
+                # Map LLM decision types to valid types (small models may not follow schema exactly)
+                type_aliases = {
+                    "buy": "adjust_parameters", "sell": "adjust_parameters",
+                    "hold": "no_action", "wait": "no_action",
+                    "optimize": "run_hyperopt", "backtest": "run_hyperopt",
+                    "new_strategy": "create_strategy", "start": "create_strategy",
+                    "close": "stop_strategy", "kill": "deprecate_strategy",
+                }
+                if decision.decision_type in type_aliases:
+                    original_type = decision.decision_type
+                    decision.decision_type = type_aliases[original_type]
+                    logger.info(f"Mapped decision type '{original_type}' -> '{decision.decision_type}'")
 
                 # Execute the decision
                 result = await self._execute_single_decision(decision)
@@ -551,13 +613,15 @@ Important:
             else:
                 context_parts.append(str(ar)[:200])
 
-        # Recent decisions - last 3
+        # Recent decisions - last 3 with outcomes
         if self.context.recent_decisions:
             context_parts.append("\n## Recent Decisions")
             for dec in self.context.recent_decisions[-3:]:
                 dtype = dec.get('decision_type', '?')
                 conc = dec.get('conclusion', '')[:60]
-                context_parts.append(f"- {dtype}: {conc}")
+                outcome = (dec.get('outcome') or '')[:40]
+                outcome_str = f" -> {outcome}" if outcome else ""
+                context_parts.append(f"- {dtype}: {conc}{outcome_str}")
 
         # Errors - last 2
         if self.context.errors:

@@ -34,11 +34,12 @@ db = None
 ws_server = None
 manager = None
 research_orchestrator = None
+autonomous_orchestrator = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, ws_server, manager, research_orchestrator
+    global db, ws_server, manager, research_orchestrator, autonomous_orchestrator
 
     logger.info("Starting Freqtrade Manager...")
 
@@ -87,6 +88,18 @@ async def lifespan(app: FastAPI):
     ws_server = WebSocketServer(port=MANAGER_PORT)
     ws_server.set_manager(manager)
     ws_server.set_slack(slack_notifier)
+
+    # Setup autonomous agent routes AFTER manager and ws_server are initialized
+    try:
+        from autonomous_api import setup_autonomous_routes
+        autonomous_orchestrator = setup_autonomous_routes(app, db, manager, ws_server)
+        logger.info("Autonomous agent routes configured successfully")
+    except ImportError as e:
+        logger.warning(f"Autonomous agent routes not available: {e}")
+        autonomous_orchestrator = None
+    except Exception as e:
+        logger.error(f"Failed to setup autonomous routes: {e}")
+        autonomous_orchestrator = None
 
     ws_task = asyncio.create_task(ws_server.start())
 
@@ -807,20 +820,6 @@ async def test_slack():
     except Exception as e:
         logger.error(f"Error sending Slack notification: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== Autonomous Agent Routes ====================
-# Import and setup autonomous routes
-try:
-    from autonomous_api import setup_autonomous_routes
-    autonomous_orchestrator = setup_autonomous_routes(app, db, manager, ws_server)
-    logger.info("Autonomous agent routes configured successfully")
-except ImportError as e:
-    logger.warning(f"Autonomous agent routes not available: {e}")
-    autonomous_orchestrator = None
-except Exception as e:
-    logger.error(f"Failed to setup autonomous routes: {e}")
-    autonomous_orchestrator = None
 
 
 if __name__ == "__main__":

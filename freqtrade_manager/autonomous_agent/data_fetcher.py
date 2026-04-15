@@ -217,7 +217,62 @@ class DataFetcher:
                     logger.error(f"ccxt fetch_ohlcv failed for {pair} on {exchange_name}: {e}")
                     continue
 
+            # All exchanges failed — try CoinGecko as last resort
+            coingecko_data = await self._get_from_coingecko(pair, limit)
+            if coingecko_data is not None:
+                return coingecko_data
+
             return None
+
+    async def _get_from_coingecko(
+        self,
+        pair: str,
+        limit: int,
+    ) -> Optional[np.ndarray]:
+        """Fetch OHLCV data from CoinGecko free API (no auth, no geo-restrictions)."""
+        import aiohttp
+
+        # CoinGecko uses coin IDs, not trading pairs
+        pair_map = {
+            "BTC/USDT": "bitcoin", "BTC/USD": "bitcoin", "BTC/BUSD": "bitcoin",
+            "ETH/USDT": "ethereum", "ETH/USD": "ethereum",
+            "SOL/USDT": "solana", "SOL/USD": "solana",
+        }
+        coin_id = pair_map.get(pair)
+        if not coin_id:
+            logger.debug(f"No CoinGecko mapping for {pair}")
+            return None
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # CoinGecko OHLCV endpoint (free, no auth)
+                url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
+                params = {"vs_currency": "usd", "days": "7"}  # 7 days of hourly data
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        logger.debug(f"CoinGecko API returned {resp.status}")
+                        return None
+                    data = await resp.json()
+
+                if not isinstance(data, list) or len(data) < 10:
+                    return None
+
+                # CoinGecko returns [[timestamp, open, high, low, close], ...] (no volume)
+                # Pad volume with zeros
+                ohlcv = np.array([
+                    [candle[1], candle[2], candle[3], candle[4], 0.0]
+                    for candle in data
+                    if len(candle) >= 5
+                ], dtype=np.float64)
+
+                if len(ohlcv) > 0:
+                    logger.info(f"Fetched {len(ohlcv)} candles for {pair} from CoinGecko")
+                    return ohlcv[-limit:]
+
+        except Exception as e:
+            logger.debug(f"CoinGecko fetch failed for {pair}: {e}")
+
+        return None
 
     def _get_from_exchange_sync(
         self,
