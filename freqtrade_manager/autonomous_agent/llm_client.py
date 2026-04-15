@@ -41,7 +41,7 @@ class LLMConfig:
     base_url: Optional[str] = None
     max_tokens: int = 4096
     temperature: float = 0.7
-    timeout_seconds: int = 120
+    timeout_seconds: int = 300
 
     # Rate limiting
     requests_per_minute: int = 60
@@ -338,7 +338,7 @@ class OllamaProvider(BaseLLMProvider):
         }
 
         # Use extended timeout for thinking/reasoning models
-        timeout = aiohttp.ClientTimeout(total=max(self.config.timeout_seconds, 300))
+        timeout = aiohttp.ClientTimeout(total=max(self.config.timeout_seconds, 600))
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
