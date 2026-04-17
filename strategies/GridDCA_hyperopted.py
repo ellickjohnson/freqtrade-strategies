@@ -136,7 +136,7 @@ class GridDCA_hyperopted(IStrategy):
         
         # Bollinger Bands
         dataframe['bb_upper'], dataframe['bb_mid'], dataframe['bb_lower'] = ta.BBANDS(
-            dataframe['close'].values, timeperiod=20, nbdevup=2, nbdevdn=2
+            dataframe['close'].values, timeperiod=20, nbdevup=2.0, nbdevdn=2.0
         )
         
         # Entry/exit flags

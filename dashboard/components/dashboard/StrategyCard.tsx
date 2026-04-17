@@ -144,21 +144,21 @@ export default function StrategyCard({ strategy, onUpdate }: StrategyCardProps) 
             <div>
               <p className="text-xs text-slate-400 mb-1">P&amp;L</p>
               <p className="text-lg font-bold text-slate-50">
-                {formatCurrency(0)}
+                {formatCurrency(strategy.profit_pct ?? 0)}
               </p>
             </div>
             
             <div>
               <p className="text-xs text-slate-400 mb-1">Win Rate</p>
               <p className="text-lg font-bold text-slate-50">
-                {formatPercent(0, 0)}
+                {formatPercent(strategy.win_rate ?? 0, 0)}
               </p>
             </div>
             
             <div>
               <p className="text-xs text-slate-400 mb-1">Trades</p>
               <p className="text-lg font-bold text-slate-50">
-                0 / 0
+                {strategy.total_trades ?? 0}
               </p>
             </div>
           </div>

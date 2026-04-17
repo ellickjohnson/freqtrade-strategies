@@ -23,6 +23,7 @@ class FreqtradeManager:
         backtest_runner: BacktestRunner,
         freqai_adapter: FreqAIAdapter,
         slack_notifier: SlackNotifier,
+        trade_monitor=None,
         templates_dir: str = "/templates",
     ):
         self.db = db
@@ -31,6 +32,7 @@ class FreqtradeManager:
         self.backtest_runner = backtest_runner
         self.freqai_adapter = freqai_adapter
         self.slack = slack_notifier
+        self.trade_monitor = trade_monitor
         self.templates = self._load_templates(templates_dir)
 
     def _load_templates(self, templates_dir: str) -> Dict[str, Any]:
@@ -247,6 +249,39 @@ class FreqtradeManager:
                     },
                 ],
             },
+            "swing_dca": {
+                "name": "SwingDCA 1H (Mean Reversion Swing)",
+                "strategy_type": StrategyType.GRID_DCA,
+                "strategy_file": "SwingDCA",
+                "description": "1-hour timeframe mean reversion with DCA. Captures bigger swings, wider stops, longer holds.",
+                "default_config": {
+                    "stoploss": -0.08,
+                    "max_open_trades": 3,
+                    "stake_amount": 100,
+                    "timeframe": "1h",
+                    "trailing_stop": True,
+                    "trailing_stop_positive": 0.015,
+                    "trailing_stop_positive_offset": 0.02,
+                    "trailing_only_offset_is_reached": True,
+                    "minimal_roi": {"0": 0.04, "60": 0.02, "240": 0.01},
+                },
+                "params": [
+                    {
+                        "name": "rsi_oversold",
+                        "label": "RSI Oversold",
+                        "type": "slider",
+                        "min": 25,
+                        "max": 45,
+                        "default": 40,
+                    },
+                    {
+                        "name": "take_profit_pct",
+                        "label": "Take Profit %",
+                        "type": "number",
+                        "default": 3.5,
+                    },
+                ],
+            },
         }
 
         templates_path = Path(templates_dir)
@@ -371,6 +406,50 @@ class FreqtradeManager:
 
         config = self.config_parser.load_config(strategy["config_path"])
         config = self.config_parser.update_strategy_params(config, config_updates)
+
+        STRATEGY_PARAM_KEYS = {
+            "rsi_entry_threshold",
+            "rsi_entry",
+            "rsi_oversold",
+            "rsi_overbought",
+            "volume_factor",
+            "volume_mult",
+            "stoploss",
+            "minimal_roi",
+            "trailing_stop_positive",
+            "trailing_stop_positive_offset",
+            "max_open_trades",
+            "stake_amount",
+            "pairs_to_add",
+            "pairs_to_remove",
+            "take_profit_pct",
+            "cooldown_candles",
+            "breakout_period",
+            "adx_threshold",
+            "rsi_min",
+            "rsi_max",
+        }
+        params_to_inject = {}
+        for key, value in config_updates.items():
+            if key in STRATEGY_PARAM_KEYS:
+                params_to_inject[key] = value
+        if params_to_inject:
+            existing_params = config.get("strategy_params", {})
+            existing_params.update(params_to_inject)
+            config["strategy_params"] = existing_params
+
+        if "pairs_to_add" in config_updates or "pairs_to_remove" in config_updates:
+            current_pairs = config.get("exchange", {}).get("pair_whitelist", [])
+            pairs_to_add = config_updates.get("pairs_to_add", [])
+            pairs_to_remove = config_updates.get("pairs_to_remove", [])
+            for pair in pairs_to_add:
+                if pair not in current_pairs:
+                    current_pairs.append(pair)
+            for pair in pairs_to_remove:
+                if pair in current_pairs:
+                    current_pairs.remove(pair)
+            config["exchange"]["pair_whitelist"] = current_pairs
+
         self.config_parser.save_config(strategy["config_path"], config)
 
         db_updates = {"updated_at": datetime.now()}
@@ -384,6 +463,18 @@ class FreqtradeManager:
             db_updates["trailing_stop"] = 1 if config_updates["trailing_stop"] else 0
 
         await self.db.update_strategy(strategy_id, db_updates)
+
+        if self.container_manager:
+            try:
+                container_status = await self.container_manager.get_container_status(
+                    strategy_id
+                )
+                if container_status and container_status.get("status") == "running":
+                    await self.container_manager.restart_container(strategy_id)
+            except Exception as e:
+                print(
+                    f"Warning: Failed to restart container after config update for {strategy_id}: {e}"
+                )
 
         return True
 
@@ -424,8 +515,15 @@ class FreqtradeManager:
         )
 
         await self.slack.send_strategy_started(
-            strategy["name"], json.loads(strategy["pairs"]), port
+            strategy["name"],
+            json.loads(strategy["pairs"])
+            if isinstance(strategy["pairs"], str)
+            else strategy["pairs"],
+            port,
         )
+
+        if self.trade_monitor:
+            await self.trade_monitor.start_monitoring(strategy_id)
 
         return {
             "strategy_id": strategy_id,
@@ -455,6 +553,9 @@ class FreqtradeManager:
         )
 
         await self.slack.send_strategy_stopped(strategy["name"])
+
+        if self.trade_monitor:
+            await self.trade_monitor.stop_monitoring(strategy_id)
 
         return {"strategy_id": strategy_id, "status": "stopped"}
 
@@ -498,9 +599,97 @@ class FreqtradeManager:
                     strategy["container_status"] = None
             else:
                 strategy["container_status"] = None
+
+            perf = await self._get_strategy_performance(strategy["id"])
+            strategy["win_rate"] = perf.get("win_rate", 0)
+            strategy["sharpe"] = perf.get("sharpe", 0)
+            strategy["profit_pct"] = perf.get("profit_pct", 0)
+            strategy["total_trades"] = perf.get("total_trades", 0)
+            strategy["max_drawdown"] = perf.get("max_drawdown", 0)
+
             enriched.append(strategy)
 
         return enriched
+
+    async def _get_strategy_performance(self, strategy_id: str) -> Dict[str, Any]:
+        """Get performance metrics for a strategy from its Freqtrade trade DB."""
+        import sqlite3
+        from pathlib import Path
+
+        perf = {
+            "win_rate": 0,
+            "sharpe": 0,
+            "profit_pct": 0,
+            "total_trades": 0,
+            "max_drawdown": 0,
+        }
+
+        try:
+            trade_db_path = Path(f"/user_data/{strategy_id}/tradesv3.dryrun.sqlite")
+            if not trade_db_path.exists():
+                trade_db_path = Path(f"/user_data/{strategy_id}/tradesv3.sqlite")
+
+            if not trade_db_path.exists():
+                return perf
+
+            import aiosqlite
+
+            async with aiosqlite.connect(str(trade_db_path)) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute("""
+                    SELECT
+                        COUNT(*) as total_trades,
+                        SUM(CASE WHEN close_profit > 0 THEN 1 ELSE 0 END) as wins,
+                        SUM(close_profit_abs) as total_profit,
+                        AVG(close_profit) as avg_profit
+                    FROM trades
+                    WHERE is_open = 0
+                """)
+                row = await cursor.fetchone()
+
+                if row and row["total_trades"] and row["total_trades"] > 0:
+                    perf["total_trades"] = row["total_trades"]
+                    perf["win_rate"] = (row["wins"] or 0) / row["total_trades"]
+                    perf["profit_pct"] = row["total_profit"] or 0
+
+                    profits_cursor = await db.execute(
+                        "SELECT close_profit FROM trades WHERE is_open = 0 ORDER BY close_date DESC LIMIT 200"
+                    )
+                    profit_rows = await profits_cursor.fetchall()
+                    profits = [
+                        r["close_profit"]
+                        for r in profit_rows
+                        if r["close_profit"] is not None
+                    ]
+
+                    if len(profits) > 1:
+                        avg_p = sum(profits) / len(profits)
+                        std_p = (
+                            sum((p - avg_p) ** 2 for p in profits) / len(profits)
+                        ) ** 0.5
+                        perf["sharpe"] = (
+                            (avg_p / std_p * (365**0.5)) if std_p > 0 else 0
+                        )
+
+                        cumulative = []
+                        running = 0
+                        for p in profits:
+                            running += p
+                            cumulative.append(running)
+                        peak = float("-inf")
+                        max_dd = 0
+                        for c in cumulative:
+                            if c > peak:
+                                peak = c
+                            if peak != 0:
+                                dd = (peak - c) / abs(peak)
+                                if dd > max_dd:
+                                    max_dd = dd
+                        perf["max_drawdown"] = max_dd
+        except Exception as e:
+            print(f"Warning: Could not get performance for {strategy_id}: {e}")
+
+        return perf
 
     async def run_backtest(
         self, strategy_id: str, timerange: str, params: Optional[Dict[str, Any]] = None

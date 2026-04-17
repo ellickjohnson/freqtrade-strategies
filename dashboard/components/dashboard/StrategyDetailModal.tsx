@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Strategy, Trade } from "@/lib/types"
 import { api } from "@/lib/api"
+import { formatCurrency, formatPercent } from "@/lib/utils"
 import { LogViewer } from "./LogViewer"
 import { FreqAIInsightsPanel } from "./FreqAIInsightsPanel"
 import { Brain, Loader2, RefreshCw } from "lucide-react"
@@ -23,8 +24,9 @@ export function StrategyDetailModal({ strategy, open, onOpenChange, onUpdate }: 
   const [trades, setTrades] = useState<Trade[]>([])
   const [containerLogs, setContainerLogs] = useState<string[]>([])
   const [reasoningLogs, setReasoningLogs] = useState<any[]>([])
+  const [decisions, setDecisions] = useState<any[]>([])
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
-  const [loading, setLoading] = useState({ trades: false, logs: false, freqai: false, reasoning: false })
+  const [loading, setLoading] = useState({ trades: false, logs: false, freqai: false, reasoning: false, decisions: false })
   const [freqaiModel, setFreqaiModel] = useState("lightgbm")
   const [freqaiEnabled, setFreqaiEnabled] = useState(false)
 
@@ -33,6 +35,7 @@ export function StrategyDetailModal({ strategy, open, onOpenChange, onUpdate }: 
       loadTrades()
       loadLogs()
       loadReasoning()
+      loadDecisions()
       setFreqaiEnabled(strategy.use_freqai || false)
     }
   }, [strategy, open])
@@ -74,11 +77,31 @@ export function StrategyDetailModal({ strategy, open, onOpenChange, onUpdate }: 
       console.error("Failed to load reasoning:", error)
     } finally {
       setLoading(l => ({ ...l, reasoning: false }))
+      setLastRefresh(new Date())
+    }
+  }
+
+  const loadDecisions = async () => {
+    if (!strategy) return
+    setLoading(l => ({ ...l, decisions: true }))
+    try {
+      const result = await api.getDecisions({ limit: 50, since_hours: 72 })
+      const filtered = (result.decisions || []).filter(
+        (d: any) => {
+          const target = d.metadata?.target || d.context?.strategies?.[0] || ""
+          return target === strategy.id || JSON.stringify(d.context || {}).includes(strategy.id)
+        }
+      )
+      setDecisions(filtered)
+    } catch (error) {
+      console.error("Failed to load decisions:", error)
+    } finally {
+      setLoading(l => ({ ...l, decisions: false }))
     }
   }
 
   const handleRefresh = async () => {
-    await Promise.all([loadTrades(), loadLogs(), loadReasoning()])
+    await Promise.all([loadTrades(), loadLogs(), loadReasoning(), loadDecisions()])
   }
 
   const handleEnableFreqAI = async () => {
@@ -110,9 +133,6 @@ export function StrategyDetailModal({ strategy, open, onOpenChange, onUpdate }: 
   }
 
   if (!strategy) return null
-
-  const formatCurrency = (value: number) =>
-    new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0)
 
   const formatDate = (date: string) =>
     new Date(date).toLocaleString()
@@ -209,11 +229,23 @@ export function StrategyDetailModal({ strategy, open, onOpenChange, onUpdate }: 
                   <div className="space-y-1 text-sm">
                     <div className="flex justify-between">
                       <span className="text-gray-400">Win Rate:</span>
-                      <span className="font-mono">--</span>
+                      <span className="font-mono">{strategy.win_rate != null ? formatPercent(strategy.win_rate, 0) : '--'}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">Total P&L:</span>
-                      <span className="font-mono">--</span>
+                      <span className="text-gray-400">Total P&amp;L:</span>
+                      <span className="font-mono">{strategy.profit_pct != null ? formatCurrency(strategy.profit_pct) : '--'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Sharpe Ratio:</span>
+                      <span className="font-mono">{strategy.sharpe != null ? strategy.sharpe.toFixed(2) : '--'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Max Drawdown:</span>
+                      <span className="font-mono">{strategy.max_drawdown != null ? formatPercent(strategy.max_drawdown, 0) : '--'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Total Trades:</span>
+                      <span className="font-mono">{strategy.total_trades ?? '--'}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-400">Open Trades:</span>
@@ -258,7 +290,91 @@ export function StrategyDetailModal({ strategy, open, onOpenChange, onUpdate }: 
             </TabsContent>
 
             <TabsContent value="reasoning">
-              <LogViewer strategyId={strategy.id} category="reasoning" />
+              <div className="space-y-4">
+                <h3 className="font-semibold text-sm text-gray-500">Autonomous Agent Decisions</h3>
+                {loading.decisions ? (
+                  <div className="text-center py-8 text-gray-400">Loading decisions...</div>
+                ) : decisions.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400">No autonomous decisions for this strategy yet</div>
+                ) : (
+                  <div className="space-y-3">
+                    {decisions.map((decision: any) => {
+                      const decisionType = decision.decision_type || "unknown"
+                      const confidence = decision.confidence ?? 0
+                      const reasoning = decision.reasoning_chain?.join("\n→ ") || decision.conclusion || ""
+                      const outcome = decision.outcome || "pending"
+                      const timestamp = decision.timestamp || decision.created_at || ""
+                      const params = decision.metadata?.parameters || {}
+                      const target = decision.metadata?.target || ""
+
+                      const getTypeColor = (type: string) => {
+                        switch (type) {
+                          case "adjust_parameters": return "bg-blue-500/20 text-blue-400 border-blue-500/30"
+                          case "run_hyperopt": return "bg-purple-500/20 text-purple-400 border-purple-500/30"
+                          case "stop_strategy": return "bg-red-500/20 text-red-400 border-red-500/30"
+                          case "no_action": return "bg-gray-500/20 text-gray-400 border-gray-500/30"
+                          case "create_strategy": return "bg-green-500/20 text-green-400 border-green-500/30"
+                          default: return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30"
+                        }
+                      }
+
+                      return (
+                        <div key={decision.id} className="p-3 bg-gray-900 rounded-lg border border-gray-800">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-xs font-medium border ${getTypeColor(decisionType)}`}>
+                                {decisionType.replace(/_/g, " ")}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {confidence ? `${(confidence * 100).toFixed(0)}% confidence` : ""}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-xs ${
+                                outcome.includes("success") || outcome.includes("adjusted") || outcome.includes("applied")
+                                  ? "bg-green-500/20 text-green-400"
+                                  : outcome.includes("pending")
+                                  ? "bg-yellow-500/20 text-yellow-400"
+                                  : "bg-gray-500/20 text-gray-400"
+                              }`}>
+                                {outcome}
+                              </span>
+                              {timestamp && (
+                                <span className="text-xs text-gray-500">
+                                  {new Date(timestamp).toLocaleString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {reasoning && (
+                            <p className="text-sm text-gray-300 mb-2 whitespace-pre-wrap">{reasoning}</p>
+                          )}
+                          {Object.keys(params).length > 0 && (
+                            <div className="mt-2 p-2 bg-gray-800 rounded text-xs font-mono">
+                              <span className="text-gray-500 mr-1">params:</span>
+                              {Object.entries(params).map(([k, v]) => (
+                                <span key={k} className="mr-3">
+                                  <span className="text-blue-400">{k}</span>=<span className="text-green-400">{JSON.stringify(v)}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {target && target !== strategy?.id && (
+                            <p className="text-xs text-gray-500 mt-1">target: {target}</p>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {reasoningLogs.length > 0 && (
+                  <>
+                    <h3 className="font-semibold text-sm text-gray-500 mt-4">Agent Reasoning Logs</h3>
+                    <LogViewer strategyId={strategy.id} category="reasoning" />
+                  </>
+                )}
+              </div>
             </TabsContent>
 
             <TabsContent value="trades" className="space-y-2">

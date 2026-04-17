@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AnalysisConfig:
     """Configuration for analysis agent."""
+
     min_trades_for_evaluation: int = 50
     min_sharpe_ratio: float = 0.5
     max_drawdown_threshold: float = 0.15
@@ -37,6 +38,7 @@ class AnalysisConfig:
 @dataclass
 class StrategyPerformance:
     """Performance metrics for a strategy."""
+
     strategy_id: str
     strategy_name: str
     total_trades: int = 0
@@ -60,6 +62,7 @@ class StrategyPerformance:
 @dataclass
 class MarketRegime:
     """Current market regime assessment."""
+
     regime_type: str  # "trending_up", "trending_down", "ranging", "volatile"
     confidence: float
     characteristics: Dict[str, Any]
@@ -159,7 +162,9 @@ class AnalysisAgent:
 
         return results
 
-    async def _analyze_strategy_performance(self, strategy: Dict) -> StrategyPerformance:
+    async def _analyze_strategy_performance(
+        self, strategy: Dict
+    ) -> StrategyPerformance:
         """Analyze performance metrics for a single strategy."""
         strategy_id = strategy.get("id")
         strategy_name = strategy.get("name", strategy_id[:8])
@@ -190,17 +195,25 @@ class AnalysisAgent:
         winning_profits = [p for p in profits if p > 0]
         losing_profits = [abs(p) for p in profits if p < 0]
 
-        perf.avg_profit_trade = sum(winning_profits) / len(winning_profits) if winning_profits else 0
-        perf.avg_loss_trade = sum(losing_profits) / len(losing_profits) if losing_profits else 0
+        perf.avg_profit_trade = (
+            sum(winning_profits) / len(winning_profits) if winning_profits else 0
+        )
+        perf.avg_loss_trade = (
+            sum(losing_profits) / len(losing_profits) if losing_profits else 0
+        )
 
         # Profit factor
         total_wins = sum(winning_profits)
         total_losses = sum(losing_profits)
-        perf.profit_factor = total_wins / total_losses if total_losses > 0 else float('inf')
+        perf.profit_factor = (
+            total_wins / total_losses if total_losses > 0 else float("inf")
+        )
 
         # Expectancy
         if trades:
-            perf.expectancy = (perf.win_rate * perf.avg_profit_trade) - ((1 - perf.win_rate) * perf.avg_loss_trade)
+            perf.expectancy = (perf.win_rate * perf.avg_profit_trade) - (
+                (1 - perf.win_rate) * perf.avg_loss_trade
+            )
 
         # Best/worst trades
         perf.best_trade = max(profits) if profits else 0
@@ -209,7 +222,9 @@ class AnalysisAgent:
         # Sharpe ratio (simplified)
         if len(profits) > 1:
             avg_profit = sum(profits) / len(profits)
-            std_profit = (sum((p - avg_profit) ** 2 for p in profits) / len(profits)) ** 0.5
+            std_profit = (
+                sum((p - avg_profit) ** 2 for p in profits) / len(profits)
+            ) ** 0.5
             perf.sharpe_ratio = avg_profit / std_profit if std_profit > 0 else 0
 
         # Max drawdown
@@ -219,7 +234,7 @@ class AnalysisAgent:
             running += p
             cumulative.append(running)
 
-        peak = float('-inf')
+        peak = float("-inf")
         max_dd = 0
         for c in cumulative:
             if c > peak:
@@ -240,19 +255,30 @@ class AnalysisAgent:
         return perf
 
     def _get_strategy_trades(self, strategy_id: str, limit: int = 500) -> List[Dict]:
-        """Get trade history for a strategy from database."""
+        """Get trade history for a strategy from the Freqtrade trades database."""
+        from pathlib import Path
+
         try:
-            conn = sqlite3.connect(self.db_path)
+            trade_db_path = Path(f"/user_data/{strategy_id}/tradesv3.dryrun.sqlite")
+            if not trade_db_path.exists():
+                trade_db_path = Path(f"/user_data/{strategy_id}/tradesv3.sqlite")
+
+            if not trade_db_path.exists():
+                logger.debug(f"No trade database found for {strategy_id}")
+                return []
+
+            conn = sqlite3.connect(str(trade_db_path))
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
 
-            # Try to get trades from strategy-specific database
-            c.execute("""
+            c.execute(
+                """
                 SELECT * FROM trades
-                WHERE strategy_id = ?
                 ORDER BY close_date DESC
                 LIMIT ?
-            """, (strategy_id, limit))
+            """,
+                (limit,),
+            )
 
             rows = c.fetchall()
             conn.close()
@@ -311,9 +337,7 @@ class AnalysisAgent:
         return max(0, min(100, score))
 
     async def _detect_market_regime(
-        self,
-        strategies: List[Dict],
-        research_findings: List[Dict]
+        self, strategies: List[Dict], research_findings: List[Dict]
     ) -> Optional[MarketRegime]:
         """Detect current market regime using technical indicators and LLM analysis."""
         try:
@@ -330,7 +354,10 @@ class AnalysisAgent:
                     }
                     for s in strategies
                 },
-                "research_sentiment": sum(f.get("sentiment", 0) for f in research_findings) / max(len(research_findings), 1),
+                "research_sentiment": sum(
+                    f.get("sentiment", 0) for f in research_findings
+                )
+                / max(len(research_findings), 1),
                 "technical_indicators": {},
             }
 
@@ -357,7 +384,9 @@ class AnalysisAgent:
 
             # If we have technical regime with high confidence, use it
             if technical_regime and technical_regime.get("confidence", 0) >= 0.7:
-                logger.info(f"Using technical regime detection: {technical_regime['regime_type']}")
+                logger.info(
+                    f"Using technical regime detection: {technical_regime['regime_type']}"
+                )
                 return MarketRegime(
                     regime_type=technical_regime["regime_type"],
                     confidence=technical_regime["confidence"],
@@ -370,12 +399,18 @@ class AnalysisAgent:
             schema = {
                 "type": "object",
                 "properties": {
-                    "regime_type": {"type": "string", "enum": ["trending_up", "trending_down", "ranging", "volatile"]},
+                    "regime_type": {
+                        "type": "string",
+                        "enum": ["trending_up", "trending_down", "ranging", "volatile"],
+                    },
                     "confidence": {"type": "number"},
                     "characteristics": {"type": "object"},
-                    "affected_strategies": {"type": "array", "items": {"type": "string"}},
+                    "affected_strategies": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "recommendations": {"type": "array", "items": {"type": "string"}},
-                }
+                },
             }
 
             # Build prompt with technical context
@@ -395,8 +430,8 @@ Technical Indicators (BTC/USDT):
 
             prompt = f"""Analyze the current market regime based on this data:
 {tech_context}
-Strategy performances: {json.dumps(market_data['strategy_performances'], indent=2)}
-Research sentiment average: {market_data['research_sentiment']:.2f}
+Strategy performances: {json.dumps(market_data["strategy_performances"], indent=2)}
+Research sentiment average: {market_data["research_sentiment"]:.2f}
 
 Determine:
 1. The current market regime (trending_up, trending_down, ranging, volatile)
@@ -414,7 +449,10 @@ Determine:
             if result:
                 # Merge technical regime if available
                 if technical_regime:
-                    result["confidence"] = max(result.get("confidence", 0.5), technical_regime.get("confidence", 0.5))
+                    result["confidence"] = max(
+                        result.get("confidence", 0.5),
+                        technical_regime.get("confidence", 0.5),
+                    )
 
                 return MarketRegime(
                     regime_type=result.get("regime_type", "ranging"),
@@ -429,9 +467,7 @@ Determine:
         return None
 
     async def _get_technical_indicators(
-        self,
-        pair: str = "BTC/USDT",
-        timeframe: str = "1h"
+        self, pair: str = "BTC/USDT", timeframe: str = "1h"
     ) -> Optional[TechnicalIndicators]:
         """Get technical indicators for a trading pair."""
         try:
@@ -458,7 +494,7 @@ Determine:
         correlations = {}
 
         for i, s1 in enumerate(strategies):
-            for s2 in strategies[i+1:]:
+            for s2 in strategies[i + 1 :]:
                 # Get trade history for both
                 trades1 = self._get_strategy_trades(s1.get("id"), limit=100)
                 trades2 = self._get_strategy_trades(s2.get("id"), limit=100)
@@ -516,22 +552,22 @@ Determine:
                                 "reasoning": {"type": "string"},
                                 "confidence": {"type": "number"},
                                 "parameters": {"type": "object"},
-                            }
-                        }
+                            },
+                        },
                     }
-                }
+                },
             }
 
             prompt = f"""Based on the following analysis, generate optimization recommendations:
 
 Strategy Performances:
-{json.dumps({k: v.get('health_score', 'N/A') for k, v in strategies.items()}, indent=2)}
+{json.dumps({k: v.get("health_score", "N/A") for k, v in strategies.items()}, indent=2)}
 
 Market Regime:
-{json.dumps(market_regime, indent=2) if market_regime else 'Unknown'}
+{json.dumps(market_regime, indent=2) if market_regime else "Unknown"}
 
 Recent Research Findings:
-{json.dumps([{'title': f.get('title'), 'sentiment': f.get('sentiment')} for f in research_findings[:5]], indent=2)}
+{json.dumps([{"title": f.get("title"), "sentiment": f.get("sentiment")} for f in research_findings[:5]], indent=2)}
 
 Generate specific, actionable recommendations for each strategy.
 Actions can be: adjust_parameters, run_hyperopt, stop_strategy, reduce_position, increase_position.
@@ -558,7 +594,9 @@ Include specific parameter changes when recommending adjustments."""
                 "type": "strategy_analysis",
                 "results": results,
                 "strategy_count": len(results.get("strategies", {})),
-                "market_regime": (results.get("market_regime") or {}).get("regime_type"),
+                "market_regime": (results.get("market_regime") or {}).get(
+                    "regime_type"
+                ),
             },
             tags=["analysis", "automated"],
         )
@@ -583,8 +621,20 @@ Include specific parameter changes when recommending adjustments."""
 
     def get_strategy_health(self, strategy_id: str) -> Dict[str, Any]:
         """Get health assessment for a specific strategy."""
-        strategy = {"id": strategy_id}
-        perf = self._analyze_strategy_performance(strategy)
+        perf = StrategyPerformance(
+            strategy_id=strategy_id,
+            strategy_name=strategy_id[:8],
+        )
+
+        trades = self._get_strategy_trades(strategy_id)
+        if trades:
+            perf.total_trades = len(trades)
+            perf.win_rate = len(
+                [t for t in trades if t.get("close_profit", 0) > 0]
+            ) / len(trades)
+            profits = [t.get("close_profit", 0) for t in trades]
+            perf.total_profit = sum(profits)
+            perf.health_score = self._calculate_health_score(perf)
 
         return {
             "strategy_id": strategy_id,
@@ -630,6 +680,7 @@ def strategy_performance_to_dict(self) -> Dict:
         "market_regime_correlation": self.market_regime_correlation,
     }
 
+
 StrategyPerformance.to_dict = strategy_performance_to_dict
 
 
@@ -642,5 +693,6 @@ def market_regime_to_dict(self) -> Dict:
         "affected_strategies": self.affected_strategies,
         "recommendations": self.recommendations,
     }
+
 
 MarketRegime.to_dict = market_regime_to_dict

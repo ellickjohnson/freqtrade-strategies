@@ -29,6 +29,11 @@ export interface Strategy {
   created_at: string
   updated_at: string
   custom_params: Record<string, any>
+  win_rate?: number
+  sharpe?: number
+  profit_pct?: number
+  total_trades?: number
+  max_drawdown?: number
 }
 
 export interface StrategyTemplate {

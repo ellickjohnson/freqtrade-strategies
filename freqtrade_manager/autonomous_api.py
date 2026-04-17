@@ -47,7 +47,10 @@ def setup_autonomous_routes(app, db, manager, ws_server):
     elif llm_provider_str == "ollama":
         llm_provider = LLMProvider.OLLAMA
 
-    llm_model = os.getenv("LLM_MODEL", "qwen3.5:latest" if llm_provider == LLMProvider.OLLAMA else "claude-sonnet-4-6")
+    llm_model = os.getenv(
+        "LLM_MODEL",
+        "qwen3.5:latest" if llm_provider == LLMProvider.OLLAMA else "claude-sonnet-4-6",
+    )
 
     llm_config = LLMConfig(
         provider=llm_provider,
@@ -68,7 +71,8 @@ def setup_autonomous_routes(app, db, manager, ws_server):
 
     orchestrator_config = OrchestratorConfig(
         interval_minutes=5,
-        auto_apply_improvements=os.getenv("AUTO_APPLY_IMPROVEMENTS", "true").lower() in ("true", "1", "yes"),
+        auto_apply_improvements=os.getenv("AUTO_APPLY_IMPROVEMENTS", "true").lower()
+        in ("true", "1", "yes"),
         paper_trading_only=True,
     )
 
@@ -76,9 +80,13 @@ def setup_autonomous_routes(app, db, manager, ws_server):
         """Send notifications via WebSocket and Slack."""
         try:
             if ws_server:
-                await ws_server.broadcast({"type": notification.get("type"), "data": notification})
+                await ws_server.broadcast(
+                    {"type": notification.get("type"), "data": notification}
+                )
             if manager and manager.slack:
-                await manager.slack.send(notification.get("message", "Autonomous agent notification"))
+                await manager.slack.send(
+                    notification.get("message", "Autonomous agent notification")
+                )
         except Exception as e:
             logger.error(f"Notification callback failed: {e}")
 
@@ -98,13 +106,19 @@ def setup_autonomous_routes(app, db, manager, ws_server):
 
     # Auto-start if configured
     # We schedule a delayed start so it runs after the event loop is fully up
-    autostart = os.getenv("AUTOSTART_AUTONOMOUS", "true").lower() in ("true", "1", "yes")
+    autostart = os.getenv("AUTOSTART_AUTONOMOUS", "true").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     if autostart:
+
         async def _delayed_autostart():
             await asyncio.sleep(2)  # Wait for full app startup
             if orchestrator and not orchestrator.running:
                 asyncio.create_task(orchestrator.start())
                 logger.info("Autonomous agent auto-started")
+
         # Schedule the delayed start using a background thread trick
         # since we're not in an async context at module load time
         orchestrator._autostart_requested = True
@@ -129,7 +143,10 @@ def setup_autonomous_routes(app, db, manager, ws_server):
         """Start autonomous mode."""
         try:
             if orchestrator.running:
-                return {"status": "already_running", "message": "Autonomous mode already running"}
+                return {
+                    "status": "already_running",
+                    "message": "Autonomous mode already running",
+                }
 
             # Start in background
             asyncio.create_task(orchestrator.start())
@@ -156,8 +173,9 @@ def setup_autonomous_routes(app, db, manager, ws_server):
         decision_type: Optional[str] = None,
         since_hours: int = 24,
         limit: int = 50,
+        target: Optional[str] = None,
     ):
-        """Get recent agent decisions."""
+        """Get recent agent decisions, optionally filtered by target strategy."""
         try:
             since = datetime.utcnow() - timedelta(hours=since_hours)
             decisions = kg.get_decisions(
@@ -166,6 +184,13 @@ def setup_autonomous_routes(app, db, manager, ws_server):
                 since=since,
                 limit=limit,
             )
+            if target:
+                decisions = [
+                    d
+                    for d in decisions
+                    if (d.metadata or {}).get("target", "") == target
+                    or target in str(d.context)
+                ]
             return {"decisions": [d.to_dict() for d in decisions]}
         except Exception as e:
             logger.error(f"Error getting decisions: {e}")
@@ -195,6 +220,35 @@ def setup_autonomous_routes(app, db, manager, ws_server):
             return {"approvals": [p.to_dict() for p in pending]}
         except Exception as e:
             logger.error(f"Error getting pending approvals: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/autonomous/approvals/approve-all")
+    async def approve_all_decisions():
+        """Approve all pending decisions."""
+        try:
+            pending = kg.get_pending_approvals()
+            approved = []
+            for decision in pending:
+                try:
+                    result = await orchestrator.approve_decision(decision.id)
+                    approved.append({"decision_id": decision.id, "result": result})
+                except Exception as e:
+                    approved.append({"decision_id": decision.id, "error": str(e)})
+            return {"approved": approved, "total": len(approved)}
+        except Exception as e:
+            logger.error(f"Error approving all decisions: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/autonomous/approvals/clear")
+    async def clear_all_decisions():
+        """Clear all pending approvals (reject all)."""
+        try:
+            pending = kg.get_pending_approvals()
+            for decision in pending:
+                orchestrator.reject_decision(decision.id, "Cleared by user")
+            return {"cleared": len(pending)}
+        except Exception as e:
+            logger.error(f"Error clearing decisions: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/api/autonomous/approvals/{decision_id}/approve")
@@ -244,8 +298,50 @@ def setup_autonomous_routes(app, db, manager, ws_server):
     async def apply_finding(finding_id: str, strategy_id: str):
         """Apply a research finding to a strategy."""
         try:
+            findings = kg.get_findings(limit=200)
+            finding = None
+            for f in findings:
+                if f.id == finding_id:
+                    finding = f
+                    break
+
+            if not finding:
+                raise HTTPException(
+                    status_code=404, detail=f"Finding {finding_id} not found"
+                )
+
+            best_params = (finding.impact_assessment or {}).get("best_params", {})
+            trading_implications = (finding.impact_assessment or {}).get(
+                "trading_implications", {}
+            )
+
+            params_to_apply = {}
+            if best_params:
+                params_to_apply.update(best_params)
+            if trading_implications:
+                for key in (
+                    "stoploss",
+                    "trailing_stop_positive",
+                    "max_open_trades",
+                    "stake_amount",
+                ):
+                    if key in trading_implications:
+                        params_to_apply[key] = trading_implications[key]
+
+            applied_params = {}
+            if params_to_apply and manager:
+                await manager.update_strategy_config(strategy_id, params_to_apply)
+                applied_params = params_to_apply
+
             kg.mark_finding_applied(finding_id, strategy_id)
-            return {"status": "applied", "finding_id": finding_id, "strategy_id": strategy_id}
+            return {
+                "status": "applied",
+                "finding_id": finding_id,
+                "strategy_id": strategy_id,
+                "params_applied": applied_params,
+            }
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error applying finding: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -394,6 +490,7 @@ def setup_autonomous_routes(app, db, manager, ws_server):
         """Search agent memory in Obsidian vault."""
         try:
             from autonomous_agent.obsidian_store import search_obsidian_memory
+
             results = await search_obsidian_memory(query, limit=limit)
             return {"results": results}
         except Exception as e:
@@ -405,6 +502,7 @@ def setup_autonomous_routes(app, db, manager, ws_server):
         """Get memory summary from Obsidian vault."""
         try:
             from autonomous_agent.obsidian_store import get_memory_summary
+
             summary = get_memory_summary()
             return summary
         except Exception as e:
@@ -413,14 +511,15 @@ def setup_autonomous_routes(app, db, manager, ws_server):
 
     @app.get("/api/autonomous/memory/list")
     async def list_memory_notes(
-        memory_type: Optional[str] = None,
-        limit: int = 50,
-        offset: int = 0
+        memory_type: Optional[str] = None, limit: int = 50, offset: int = 0
     ):
         """List notes in memory vault."""
         try:
             from autonomous_agent.obsidian_store import list_memory_notes
-            notes = list_memory_notes(memory_type=memory_type, limit=limit, offset=offset)
+
+            notes = list_memory_notes(
+                memory_type=memory_type, limit=limit, offset=offset
+            )
             return {"notes": notes}
         except Exception as e:
             logger.error(f"Error listing memory notes: {e}")
@@ -431,6 +530,7 @@ def setup_autonomous_routes(app, db, manager, ws_server):
         """Get memory backend status."""
         try:
             from autonomous_agent.memory_backend import get_memory_backend
+
             backend = get_memory_backend()
             return {
                 "available": backend.is_available(),
@@ -468,11 +568,15 @@ def setup_autonomous_routes(app, db, manager, ws_server):
             if "interval_minutes" in config:
                 orchestrator.config.interval_minutes = config["interval_minutes"]
             if "auto_apply_improvements" in config:
-                orchestrator.config.auto_apply_improvements = config["auto_apply_improvements"]
+                orchestrator.config.auto_apply_improvements = config[
+                    "auto_apply_improvements"
+                ]
             if "paper_trading_only" in config:
                 orchestrator.config.paper_trading_only = config["paper_trading_only"]
             if "max_portfolio_drawdown" in config:
-                orchestrator.config.max_portfolio_drawdown = config["max_portfolio_drawdown"]
+                orchestrator.config.max_portfolio_drawdown = config[
+                    "max_portfolio_drawdown"
+                ]
 
             return {"status": "updated", "config": config}
         except Exception as e:

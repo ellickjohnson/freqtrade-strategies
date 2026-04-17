@@ -16,8 +16,16 @@ from .llm_client import LLMClient
 from .knowledge_graph import KnowledgeGraph, ResearchFinding, EntityType
 from .data_sources.news import fetch_news, NewsItem
 from .data_sources.sentiment import fetch_sentiment, SentimentItem
-from .data_sources.onchain import fetch_onchain_metrics, analyze_onchain_signals, OnChainMetric
-from .data_sources.macro import fetch_macro_indicators, analyze_macro_environment, MacroIndicator
+from .data_sources.onchain import (
+    fetch_onchain_metrics,
+    analyze_onchain_signals,
+    OnChainMetric,
+)
+from .data_sources.macro import (
+    fetch_macro_indicators,
+    analyze_macro_environment,
+    MacroIndicator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +33,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DataSourceConfig:
     """Configuration for a data source."""
+
     enabled: bool = True
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -35,6 +44,7 @@ class DataSourceConfig:
 @dataclass
 class ResearchConfig:
     """Configuration for research agent."""
+
     # News sources
     news_enabled: bool = True
     newsapi_key: Optional[str] = None
@@ -121,10 +131,11 @@ class ResearchAgent:
 
         # Filter by confidence and relevance
         filtered = [
-            f for f in findings
+            f
+            for f in findings
             if f.get("confidence", 0) >= self.config.min_confidence
             and f.get("relevance", 0) >= self.config.relevance_threshold
-        ][:self.config.max_findings_per_cycle]
+        ][: self.config.max_findings_per_cycle]
 
         # Store findings in knowledge graph
         for finding in filtered:
@@ -146,9 +157,7 @@ class ResearchAgent:
         # Fetch news from data sources (with fallback to mock)
         try:
             news_items = await fetch_news(
-                sources=sources if sources else None,
-                limit=20,
-                fallback_to_mock=True
+                sources=sources if sources else None, limit=20, fallback_to_mock=True
             )
 
             for item in news_items[:15]:
@@ -177,11 +186,13 @@ class ResearchAgent:
                 url = item.url
                 entities = item.entities
             else:
-                title = item.get('title', '')
-                body = item.get('body', item.get('description', item.get('summary', '')))[:1000]
-                source = item.get('source', 'unknown')
-                url = item.get('url', '')
-                entities = item.get('entities', item.get('categories', []))
+                title = item.get("title", "")
+                body = item.get(
+                    "body", item.get("description", item.get("summary", ""))
+                )[:1000]
+                source = item.get("source", "unknown")
+                url = item.get("url", "")
+                entities = item.get("entities", item.get("categories", []))
 
             schema = {
                 "type": "object",
@@ -190,18 +201,15 @@ class ResearchAgent:
                     "sentiment": {"type": "number", "minimum": -1, "maximum": 1},
                     "relevance": {"type": "number", "minimum": 0, "maximum": 1},
                     "confidence": {"type": "number"},
-                    "impact_areas": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    },
-                    "affected_assets": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    },
+                    "impact_areas": {"type": "array", "items": {"type": "string"}},
+                    "affected_assets": {"type": "array", "items": {"type": "string"}},
                     "trading_implications": {"type": "string"},
-                    "time_horizon": {"type": "string", "enum": ["immediate", "short", "medium", "long"]},
+                    "time_horizon": {
+                        "type": "string",
+                        "enum": ["immediate", "short", "medium", "long"],
+                    },
                 },
-                "required": ["summary", "sentiment", "relevance", "confidence"]
+                "required": ["summary", "sentiment", "relevance", "confidence"],
             }
 
             prompt = f"""Analyze this news item for trading relevance:
@@ -220,7 +228,9 @@ Extract:
 7. Trading implications
 8. Time horizon for impact"""
 
-            result = await self.llm.analyze(prompt, schema, system_prompt="You are a financial news analyst.")
+            result = await self.llm.analyze(
+                prompt, schema, system_prompt="You are a financial news analyst."
+            )
 
             if result:
                 return {
@@ -233,11 +243,17 @@ Extract:
                     "relevance": result.get("relevance", 0.5),
                     "impact_assessment": {
                         "areas": result.get("impact_areas", []),
-                        "assets": result.get("affected_assets", entities if isinstance(entities, list) else []),
+                        "assets": result.get(
+                            "affected_assets",
+                            entities if isinstance(entities, list) else [],
+                        ),
                         "trading_implications": result.get("trading_implications", ""),
                         "time_horizon": result.get("time_horizon", "short"),
                     },
-                    "entities": result.get("affected_assets", entities if isinstance(entities, list) else []),
+                    "entities": result.get(
+                        "affected_assets",
+                        entities if isinstance(entities, list) else [],
+                    ),
                     "confidence": result.get("confidence", 0.5),
                     "metadata": {
                         "url": url,
@@ -261,9 +277,7 @@ Extract:
         # Fetch sentiment from data sources (with fallback to mock)
         try:
             sentiment_items = await fetch_sentiment(
-                sources=sources if sources else None,
-                limit=100,
-                fallback_to_mock=True
+                sources=sources if sources else None, limit=100, fallback_to_mock=True
             )
 
             for item in sentiment_items[:20]:
@@ -288,12 +302,14 @@ Extract:
                 content = item.content
                 entities = item.entities
             else:
-                platform = item.get('platform', 'unknown')
-                topic = item.get('topic', item.get('subreddit', 'unknown'))
-                sentiment_score = item.get('sentiment_score', item.get('sentiment', 0.5))
-                engagement = item.get('mention_count', item.get('engagement', 0))
-                content = item.get('content', item.get('title', ''))
-                entities = item.get('entities', [])
+                platform = item.get("platform", "unknown")
+                topic = item.get("topic", item.get("subreddit", "unknown"))
+                sentiment_score = item.get(
+                    "sentiment_score", item.get("sentiment", 0.5)
+                )
+                engagement = item.get("mention_count", item.get("engagement", 0))
+                content = item.get("content", item.get("title", ""))
+                entities = item.get("entities", [])
 
             schema = {
                 "type": "object",
@@ -302,7 +318,7 @@ Extract:
                     "confidence": {"type": "number"},
                     "contrarian_signal": {"type": "boolean"},
                     "trading_implication": {"type": "string"},
-                }
+                },
             }
 
             prompt = f"""Analyze this social sentiment data:
@@ -311,7 +327,7 @@ Platform: {platform}
 Topic: {topic}
 Sentiment Score: {sentiment_score}
 Engagement: {engagement}
-Content Sample: {content[:200] if content else 'N/A'}
+Content Sample: {content[:200] if content else "N/A"}
 
 Interpret:
 1. What does this sentiment indicate?
@@ -356,9 +372,7 @@ Interpret:
             assets = ["BTC", "ETH"]
 
             onchain_metrics = await fetch_onchain_metrics(
-                metrics=metrics,
-                assets=assets,
-                fallback_to_mock=True
+                metrics=metrics, assets=assets, fallback_to_mock=True
             )
 
             # Analyze the metrics for signals
@@ -410,20 +424,23 @@ Interpret:
                 asset = item.asset
                 trend = "positive" if item.change_24h > 0 else "negative"
             else:
-                metric = item.get('metric', 'unknown')
-                value = item.get('value', 0)
-                unit = item.get('unit', '')
-                asset = item.get('asset', 'market-wide')
-                trend = item.get('trend', 'unknown')
+                metric = item.get("metric", "unknown")
+                value = item.get("value", 0)
+                unit = item.get("unit", "")
+                asset = item.get("asset", "market-wide")
+                trend = item.get("trend", "unknown")
 
             schema = {
                 "type": "object",
                 "properties": {
                     "interpretation": {"type": "string"},
                     "confidence": {"type": "number"},
-                    "signal_strength": {"type": "string", "enum": ["weak", "moderate", "strong"]},
+                    "signal_strength": {
+                        "type": "string",
+                        "enum": ["weak", "moderate", "strong"],
+                    },
                     "trading_implication": {"type": "string"},
-                }
+                },
             }
 
             prompt = f"""Analyze this on-chain metric:
@@ -466,11 +483,16 @@ What does this metric indicate for trading?"""
         # Fetch macro indicators from data sources (with fallback to mock)
         try:
             # Use configured indicators or defaults
-            indicators = ["dxy", "vix", "treasury_10y", "fed_funds_rate", "unemployment"]
+            indicators = [
+                "dxy",
+                "vix",
+                "treasury_10y",
+                "fed_funds_rate",
+                "unemployment",
+            ]
 
             macro_indicators = await fetch_macro_indicators(
-                indicators=indicators,
-                fallback_to_mock=True
+                indicators=indicators, fallback_to_mock=True
             )
 
             # Analyze the macro environment
@@ -485,7 +507,9 @@ What does this metric indicate for trading?"""
                         "finding_type": "macro_analysis",
                         "title": f"Macro Environment: {analysis.get('overall_assessment', 'neutral').title()}",
                         "content": analysis.get("crypto_implications", ""),
-                        "sentiment": 0.6 if analysis.get("overall_assessment") == "bullish" else 0.4,
+                        "sentiment": 0.6
+                        if analysis.get("overall_assessment") == "bullish"
+                        else 0.4,
                         "relevance": 0.7,
                         "impact_assessment": {
                             "risk_factors": analysis.get("risk_factors", []),
@@ -495,7 +519,9 @@ What does this metric indicate for trading?"""
                         "entities": ["market-wide"],
                         "confidence": analysis.get("confidence", 0.5),
                         "metadata": {
-                            "overall_assessment": analysis.get("overall_assessment", "neutral"),
+                            "overall_assessment": analysis.get(
+                                "overall_assessment", "neutral"
+                            ),
                             "risk_level": analysis.get("risk_level", "moderate"),
                         },
                     }
@@ -524,12 +550,12 @@ What does this metric indicate for trading?"""
                 change = item.change_3m
                 interpretation = item.interpretation
             else:
-                indicator = item.get('indicator', 'unknown')
-                name = item.get('name', item.get('indicator', '').upper())
-                value = item.get('value', 0)
-                unit = item.get('unit', '')
-                change = item.get('change_pct', item.get('change_3m', 0))
-                interpretation = item.get('interpretation', '')
+                indicator = item.get("indicator", "unknown")
+                name = item.get("name", item.get("indicator", "").upper())
+                value = item.get("value", 0)
+                unit = item.get("unit", "")
+                change = item.get("change_pct", item.get("change_3m", 0))
+                interpretation = item.get("interpretation", "")
 
             schema = {
                 "type": "object",
@@ -538,7 +564,7 @@ What does this metric indicate for trading?"""
                     "confidence": {"type": "number"},
                     "crypto_impact": {"type": "string"},
                     "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
-                }
+                },
             }
 
             prompt = f"""Analyze this macro economic indicator:
@@ -580,14 +606,79 @@ What does this mean for crypto markets?"""
     def _store_finding(self, finding: Dict):
         """Store research finding in knowledge graph."""
         import uuid
-        finding_id = finding.get("id") or f"finding_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+        finding_id = (
+            finding.get("id")
+            or f"finding_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        )
+
+        def _to_float(val, default=0.5):
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, dict):
+                return float(
+                    val.get("score", val.get("value", val.get("sentiment", default)))
+                )
+            if isinstance(val, str):
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return default
+            return default
+
+        def _to_str(val, default=""):
+            if isinstance(val, str):
+                return val
+            if isinstance(val, dict):
+                return json.dumps(val)
+            if isinstance(val, list):
+                return json.dumps(val)
+            return str(val) if val is not None else default
+
+        def _to_list(val, default=None):
+            if default is None:
+                default = []
+            if isinstance(val, list):
+                return val
+            if isinstance(val, dict):
+                return [val]
+            if isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    return parsed if isinstance(parsed, list) else [parsed]
+                except (json.JSONDecodeError, TypeError):
+                    return [val]
+            return default
+
+        research_finding = ResearchFinding(
+            id=finding_id,
+            source=_to_str(finding.get("source", "unknown")),
+            finding_type=_to_str(finding.get("finding_type", "general")),
+            title=_to_str(finding.get("title", "")),
+            content=_to_str(finding.get("content", "")),
+            sentiment=_to_float(finding.get("sentiment", 0.5)),
+            relevance=_to_float(finding.get("relevance", 0.5)),
+            impact_assessment=finding.get("impact_assessment", {}),
+            entities=_to_list(finding.get("entities", [])),
+            confidence=_to_float(finding.get("confidence", 0.5)),
+            metadata=finding.get("metadata", {}),
+        )
+
+        raw_sentiment = finding.get("sentiment", 0.5)
+        if isinstance(raw_sentiment, dict):
+            sentiment_value = raw_sentiment.get(
+                "score", raw_sentiment.get("sentiment", 0.5)
+            )
+        else:
+            sentiment_value = raw_sentiment
+
         research_finding = ResearchFinding(
             id=finding_id,
             source=finding.get("source", "unknown"),
             finding_type=finding.get("finding_type", "general"),
             title=finding.get("title", ""),
             content=finding.get("content", ""),
-            sentiment=finding.get("sentiment", 0.5),
+            sentiment=sentiment_value,
             relevance=finding.get("relevance", 0.5),
             impact_assessment=finding.get("impact_assessment", {}),
             entities=finding.get("entities", []),
@@ -599,10 +690,7 @@ What does this mean for crypto markets?"""
         logger.info(f"Stored finding: {research_finding.title}")
 
     async def search_findings(
-        self,
-        query: str,
-        sources: Optional[List[str]] = None,
-        limit: int = 20
+        self, query: str, sources: Optional[List[str]] = None, limit: int = 20
     ) -> List[Dict]:
         """Search for relevant findings in knowledge graph."""
         entities = self.kg.search_entities(query, limit=limit)
@@ -614,7 +702,9 @@ What does this mean for crypto markets?"""
                 findings.append(entity.data)
 
         # Also search research findings table
-        db_findings = self.kg.get_findings(source=sources[0] if sources else None, limit=limit)
+        db_findings = self.kg.get_findings(
+            source=sources[0] if sources else None, limit=limit
+        )
 
         return findings + [f.to_dict() for f in db_findings]
 

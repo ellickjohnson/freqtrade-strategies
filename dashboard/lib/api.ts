@@ -342,6 +342,14 @@ class APIClient {
     })
   }
 
+  async approveAllDecisions(): Promise<{ approved: any[]; total: number }> {
+    return this.request('/api/autonomous/approvals/approve-all', { method: 'POST' })
+  }
+
+  async clearAllDecisions(): Promise<{ cleared: number }> {
+    return this.request('/api/autonomous/approvals/clear', { method: 'POST' })
+  }
+
   async getFindings(params?: {
     source?: string
     finding_type?: string

@@ -34,7 +34,16 @@
     "ccxt_config": {},
     "ccxt_async_config": {},
     "pair_whitelist": [
-      "BTC/USDT"
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "XRP/USDT",
+      "ADA/USDT",
+      "DOT/USDT",
+      "AVAX/USDT",
+      "LINK/USDT",
+      "MATIC/USDT",
+      "ATOM/USDT"
     ],
     "pair_blacklist": []
   },
@@ -65,18 +74,22 @@
   "db_url": "sqlite:///user_data/tradesv3.dryrun.sqlite",
   "user_data_dir": "user_data",
   "timeframe": "5m",
-  "stoploss": -0.1,
-  "trailing_stop": false,
-  "trailing_stop_positive": 0.01,
-  "trailing_stop_positive_offset": 0.02,
-  "trailing_only_offset_is_reached": false,
+  "stoploss": -0.045,
+  "trailing_stop": true,
+  "trailing_stop_positive": 0.004,
+  "trailing_stop_positive_offset": 0.006,
+  "trailing_only_offset_is_reached": true,
   "initial_state": "running",
-  "force_entry_enable": false,
+  "force_entry_enable": true,
   "internals": {
     "process_only_new_candles": false
   },
   "strategy_params": {
     "rsi_entry": 40,
-    "volume_mult": 1.5
+    "volume_mult": 1.5,
+    "trailing_stop_positive": 0.004,
+    "trailing_stop_positive_offset": 0.006,
+    "trailing_only_offset_is_reached": true,
+    "dry_run_wallet": 5000
   }
 }

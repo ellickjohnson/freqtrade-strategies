@@ -116,14 +116,24 @@ export function ActivityStream({ maxHeight = '600px', showFilters = true, agentF
   }
 
   const formatTimestamp = (ts: string) => {
-    const date = new Date(ts)
-    const now = new Date()
-    const diff = now.getTime() - date.getTime()
-
-    if (diff < 60000) return 'Just now'
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
-    return date.toLocaleDateString()
+    try {
+      let date = new Date(ts)
+      if (isNaN(date.getTime())) return ts
+      if (!ts.endsWith('Z') && !ts.includes('+') && !/\d{2}:\d{2}\s/.test(ts)) {
+        date = new Date(ts + 'Z')
+      }
+      return date.toLocaleString('en-US', {
+        timeZone: 'America/Denver',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      })
+    } catch {
+      return ts
+    }
   }
 
   const getProgressColor = (progress?: number) => {

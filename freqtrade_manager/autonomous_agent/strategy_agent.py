@@ -34,6 +34,7 @@ class StrategyState(Enum):
 @dataclass
 class StrategyHealth:
     """Health assessment for a strategy."""
+
     strategy_id: str
     strategy_name: str
     state: StrategyState
@@ -52,6 +53,7 @@ class StrategyHealth:
 @dataclass
 class StrategyConfig:
     """Configuration for strategy management."""
+
     # Lifecycle thresholds
     min_trades_for_evaluation: int = 100
     min_sharpe_ratio: float = 0.5
@@ -65,7 +67,7 @@ class StrategyConfig:
     paper_trading_min_trades: int = 50
 
     # Optimization
-    auto_hyperopt: bool = False
+    auto_hyperopt: bool = True
     hyperopt_frequency_days: int = 7
     min_improvement_for_apply: float = 3.0
 
@@ -219,7 +221,9 @@ class StrategyAgent:
 
         return issues
 
-    async def _generate_recommendations(self, health: StrategyHealth, strategy: Dict) -> List[str]:
+    async def _generate_recommendations(
+        self, health: StrategyHealth, strategy: Dict
+    ) -> List[str]:
         """Generate recommendations for the strategy."""
         recommendations = []
 
@@ -231,20 +235,29 @@ class StrategyAgent:
             recommendations.append("Monitor closely - consider optimization")
             recommendations.append("Reduce position size")
         elif health.health_score > 80:
-            recommendations.append("Strategy performing well - consider increasing allocation")
+            recommendations.append(
+                "Strategy performing well - consider increasing allocation"
+            )
 
         # State-based recommendations
         if health.state == StrategyState.PAPER_TRADING:
-            if health.total_trades > self.config.paper_trading_min_trades and health.days_running > self.config.paper_trading_duration_days:
+            if (
+                health.total_trades > self.config.paper_trading_min_trades
+                and health.days_running > self.config.paper_trading_duration_days
+            ):
                 if health.health_score > 60:
                     recommendations.append("Ready for promotion to live trading")
                 else:
-                    recommendations.append("Extend paper trading - performance below threshold")
+                    recommendations.append(
+                        "Extend paper trading - performance below threshold"
+                    )
 
         # Research-based recommendations
         unapplied_findings = self.kg.get_unapplied_findings(limit=5)
         if unapplied_findings:
-            recommendations.append(f"{len(unapplied_findings)} research findings pending application")
+            recommendations.append(
+                f"{len(unapplied_findings)} research findings pending application"
+            )
 
         # Hyperopt recommendations
         if self.config.auto_hyperopt:
@@ -253,7 +266,9 @@ class StrategyAgent:
                 last_hyperopt_date = datetime.fromisoformat(last_hyperopt)
                 days_since_hyperopt = (datetime.utcnow() - last_hyperopt_date).days
                 if days_since_hyperopt > self.config.hyperopt_frequency_days:
-                    recommendations.append(f"Due for hyperopt (last run {days_since_hyperopt} days ago)")
+                    recommendations.append(
+                        f"Due for hyperopt (last run {days_since_hyperopt} days ago)"
+                    )
 
         return recommendations
 
@@ -289,7 +304,7 @@ class StrategyAgent:
                 "pairs": pairs,
                 **(custom_params or {}),
                 "dry_run": start_paper,
-            }
+            },
         )
 
         # Log creation
@@ -545,7 +560,9 @@ class StrategyAgent:
             }
 
         # Update strategy config to live mode
-        await self.strategy_manager.update_strategy_config(strategy_id, {"dry_run": False})
+        await self.strategy_manager.update_strategy_config(
+            strategy_id, {"dry_run": False}
+        )
 
         # Log promotion
         decision = AgentDecision(
@@ -585,31 +602,39 @@ class StrategyAgent:
             health = self.evaluate_strategy_sync(strategy)
 
             if health.health_score < 30:
-                recommendations.append({
-                    "strategy_id": strategy.get("id"),
-                    "action": "deprecate",
-                    "reason": f"Health score {health.health_score} - critical",
-                    "priority": "high",
-                })
+                recommendations.append(
+                    {
+                        "strategy_id": strategy.get("id"),
+                        "action": "deprecate",
+                        "reason": f"Health score {health.health_score} - critical",
+                        "priority": "high",
+                    }
+                )
             elif health.health_score > 80 and strategy.get("status") == "paper_trading":
-                recommendations.append({
-                    "strategy_id": strategy.get("id"),
-                    "action": "promote",
-                    "reason": f"Health score {health.health_score} - ready for live",
-                    "priority": "medium",
-                })
+                recommendations.append(
+                    {
+                        "strategy_id": strategy.get("id"),
+                        "action": "promote",
+                        "reason": f"Health score {health.health_score} - ready for live",
+                        "priority": "medium",
+                    }
+                )
 
             if strategy.get("status") == "running":
                 last_hyperopt = strategy.get("last_hyperopt_at")
                 if last_hyperopt:
-                    days_since = (datetime.utcnow() - datetime.fromisoformat(last_hyperopt)).days
+                    days_since = (
+                        datetime.utcnow() - datetime.fromisoformat(last_hyperopt)
+                    ).days
                     if days_since > self.config.hyperopt_frequency_days:
-                        recommendations.append({
-                            "strategy_id": strategy.get("id"),
-                            "action": "hyperopt",
-                            "reason": f"Last hyperopt {days_since} days ago",
-                            "priority": "low",
-                        })
+                        recommendations.append(
+                            {
+                                "strategy_id": strategy.get("id"),
+                                "action": "hyperopt",
+                                "reason": f"Last hyperopt {days_since} days ago",
+                                "priority": "low",
+                            }
+                        )
 
         return recommendations
 
@@ -623,18 +648,20 @@ class StrategyAgent:
             strategy_id=strategy_id,
             strategy_name=strategy.get("name", strategy_id[:8]),
             state=StrategyState(strategy.get("status", "stopped")),
-            health_score=self._calculate_health_score(StrategyHealth(
-                strategy_id=strategy_id,
-                strategy_name=strategy.get("name", strategy_id[:8]),
-                state=StrategyState(strategy.get("status", "stopped")),
-                health_score=0,
-                total_trades=len(strategy.get("trades", [])),
-                win_rate=perf.get("win_rate", 0),
-                sharpe_ratio=perf.get("sharpe", 0),
-                max_drawdown=perf.get("max_drawdown", 0),
-                profit_pct=perf.get("profit_pct", 0),
-                days_running=0,
-            )),
+            health_score=self._calculate_health_score(
+                StrategyHealth(
+                    strategy_id=strategy_id,
+                    strategy_name=strategy.get("name", strategy_id[:8]),
+                    state=StrategyState(strategy.get("status", "stopped")),
+                    health_score=0,
+                    total_trades=len(strategy.get("trades", [])),
+                    win_rate=perf.get("win_rate", 0),
+                    sharpe_ratio=perf.get("sharpe", 0),
+                    max_drawdown=perf.get("max_drawdown", 0),
+                    profit_pct=perf.get("profit_pct", 0),
+                    days_running=0,
+                )
+            ),
             total_trades=len(strategy.get("trades", [])),
             win_rate=perf.get("win_rate", 0),
             sharpe_ratio=perf.get("sharpe", 0),
@@ -662,5 +689,6 @@ def strategy_health_to_dict(self) -> Dict:
         "issues": self.issues,
         "recommendations": self.recommendations,
     }
+
 
 StrategyHealth.to_dict = strategy_health_to_dict

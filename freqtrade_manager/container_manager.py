@@ -1,6 +1,9 @@
-import requests_unixsocket
+try:
+    import requests_unixsocket
 
-requests_unixsocket.monkeypatch()
+    requests_unixsocket.monkeypatch()
+except ImportError:
+    pass
 
 import docker
 import asyncio
@@ -118,6 +121,34 @@ class ContainerManager:
             return True
         except Exception as e:
             raise Exception(f"Error stopping container: {e}")
+
+    async def restart_container(self, strategy_id: str) -> bool:
+        """Restart a running container (stop → wait → start)."""
+        container_name = self._get_container_name(strategy_id)
+
+        try:
+            container = self.client.containers.get(container_name)
+            was_running = container.status == "running"
+
+            container.stop(timeout=10)
+            await asyncio.sleep(2)
+            container.start()
+
+            await asyncio.sleep(2)
+            container.reload()
+            if container.status != "running":
+                raise Exception(f"Container failed to restart: {container.status}")
+
+            return True
+        except docker.errors.NotFound:
+            raise Exception(f"Container {container_name} not found")
+        except Exception as e:
+            if was_running:
+                try:
+                    container.start()
+                except Exception:
+                    pass
+            raise Exception(f"Error restarting container: {e}")
 
     async def remove_container(self, strategy_id: str) -> bool:
         container_name = self._get_container_name(strategy_id)

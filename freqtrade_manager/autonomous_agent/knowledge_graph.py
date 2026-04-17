@@ -46,6 +46,7 @@ class RelationType(Enum):
 @dataclass
 class Entity:
     """A knowledge graph entity."""
+
     id: str
     entity_type: EntityType
     data: Dict[str, Any]
@@ -69,21 +70,42 @@ class Entity:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Entity":
+        raw_data = data.get("data", {})
+        if isinstance(raw_data, str):
+            try:
+                raw_data = json.loads(raw_data)
+            except (json.JSONDecodeError, TypeError):
+                raw_data = {"raw": raw_data}
+
+        raw_tags = data.get("tags", [])
+        if isinstance(raw_tags, str):
+            try:
+                raw_tags = json.loads(raw_tags)
+            except (json.JSONDecodeError, TypeError):
+                raw_tags = []
+
         return cls(
             id=data["id"],
-            entity_type=EntityType(data["entity_type"]),
-            data=data["data"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            last_accessed=datetime.fromisoformat(data["last_accessed"]),
-            confidence=data["confidence"],
-            decay_rate=data["decay_rate"],
-            tags=data.get("tags", []),
+            entity_type=EntityType(data["entity_type"])
+            if isinstance(data.get("entity_type"), str)
+            else data["entity_type"],
+            data=raw_data,
+            created_at=datetime.fromisoformat(data["created_at"])
+            if isinstance(data.get("created_at"), str)
+            else data.get("created_at", datetime.utcnow()),
+            last_accessed=datetime.fromisoformat(data["last_accessed"])
+            if isinstance(data.get("last_accessed"), str)
+            else data.get("last_accessed", datetime.utcnow()),
+            confidence=data.get("confidence", 1.0),
+            decay_rate=data.get("decay_rate", 0.01),
+            tags=raw_tags,
         )
 
 
 @dataclass
 class Relation:
     """A relationship between entities."""
+
     id: str
     from_entity: str
     to_entity: str
@@ -107,6 +129,7 @@ class Relation:
 @dataclass
 class ResearchFinding:
     """A research finding from external data sources."""
+
     id: str
     source: str  # 'news', 'sentiment', 'onchain', 'backtest', 'hyperopt'
     finding_type: str
@@ -144,6 +167,7 @@ class ResearchFinding:
 @dataclass
 class AgentDecision:
     """A decision made by an autonomous agent."""
+
     id: str
     agent_type: str  # 'orchestrator', 'research', 'analysis', 'risk', 'strategy'
     decision_type: str
@@ -157,6 +181,7 @@ class AgentDecision:
     requires_approval: bool = False
     approved_by: Optional[str] = None
     approved_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -173,6 +198,7 @@ class AgentDecision:
             "requires_approval": self.requires_approval,
             "approved_by": self.approved_by,
             "approved_at": self.approved_at.isoformat() if self.approved_at else None,
+            "metadata": self.metadata,
         }
 
 
@@ -264,14 +290,30 @@ class KnowledgeGraph:
         """)
 
         # Indexes for common queries
-        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_type ON kg_entities(entity_type)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_entities_created ON kg_entities(created_at)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_relations_from ON kg_relations(from_entity)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_relations_to ON kg_relations(to_entity)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_findings_source ON research_findings(source)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_findings_created ON research_findings(created_at)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_decisions_agent ON agent_decisions(agent_type)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_decisions_created ON agent_decisions(created_at)")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entities_type ON kg_entities(entity_type)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entities_created ON kg_entities(created_at)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relations_from ON kg_relations(from_entity)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relations_to ON kg_relations(to_entity)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_findings_source ON research_findings(source)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_findings_created ON research_findings(created_at)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_decisions_agent ON agent_decisions(agent_type)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_decisions_created ON agent_decisions(created_at)"
+        )
 
         conn.commit()
         conn.close()
@@ -283,20 +325,23 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             INSERT OR REPLACE INTO kg_entities
             (id, entity_type, data, created_at, last_accessed, confidence, decay_rate, tags)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            entity.id,
-            entity.entity_type.value,
-            json.dumps(entity.data),
-            entity.created_at.isoformat(),
-            entity.last_accessed.isoformat(),
-            entity.confidence,
-            entity.decay_rate,
-            json.dumps(entity.tags),
-        ))
+        """,
+            (
+                entity.id,
+                entity.entity_type.value,
+                json.dumps(entity.data),
+                entity.created_at.isoformat(),
+                entity.last_accessed.isoformat(),
+                entity.confidence,
+                entity.decay_rate,
+                json.dumps(entity.tags),
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -318,25 +363,32 @@ class KnowledgeGraph:
             return Entity.from_dict(dict(row))
         return None
 
-    def get_entities_by_type(self, entity_type: EntityType, limit: int = 100) -> List[Entity]:
+    def get_entities_by_type(
+        self, entity_type: EntityType, limit: int = 100
+    ) -> List[Entity]:
         """Get all entities of a type."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             SELECT * FROM kg_entities
             WHERE entity_type = ?
             ORDER BY created_at DESC
             LIMIT ?
-        """, (entity_type.value, limit))
+        """,
+            (entity_type.value, limit),
+        )
 
         rows = c.fetchall()
         conn.close()
 
         return [Entity.from_dict(dict(row)) for row in rows]
 
-    def search_entities(self, query: str, entity_type: Optional[EntityType] = None, limit: int = 50) -> List[Entity]:
+    def search_entities(
+        self, query: str, entity_type: Optional[EntityType] = None, limit: int = 50
+    ) -> List[Entity]:
         """Search entities by content."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -345,19 +397,25 @@ class KnowledgeGraph:
         search_pattern = f"%{query}%"
 
         if entity_type:
-            c.execute("""
+            c.execute(
+                """
                 SELECT * FROM kg_entities
                 WHERE entity_type = ? AND (data LIKE ? OR tags LIKE ?)
                 ORDER BY confidence DESC, created_at DESC
                 LIMIT ?
-            """, (entity_type.value, search_pattern, search_pattern, limit))
+            """,
+                (entity_type.value, search_pattern, search_pattern, limit),
+            )
         else:
-            c.execute("""
+            c.execute(
+                """
                 SELECT * FROM kg_entities
                 WHERE data LIKE ? OR tags LIKE ?
                 ORDER BY confidence DESC, created_at DESC
                 LIMIT ?
-            """, (search_pattern, search_pattern, limit))
+            """,
+                (search_pattern, search_pattern, limit),
+            )
 
         rows = c.fetchall()
         conn.close()
@@ -370,7 +428,7 @@ class KnowledgeGraph:
         c = conn.cursor()
         c.execute(
             "UPDATE kg_entities SET last_accessed = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), entity_id)
+            (datetime.utcnow().isoformat(), entity_id),
         )
         conn.commit()
         conn.close()
@@ -383,11 +441,14 @@ class KnowledgeGraph:
         cutoff = datetime.utcnow() - timedelta(days=days_old)
 
         # Decay confidence
-        c.execute("""
+        c.execute(
+            """
             UPDATE kg_entities
             SET confidence = confidence * (1 - decay_rate)
             WHERE created_at < ? AND confidence > 0.1
-        """, (cutoff.isoformat(),))
+        """,
+            (cutoff.isoformat(),),
+        )
 
         # Remove very low confidence entities
         c.execute("DELETE FROM kg_entities WHERE confidence < 0.1")
@@ -402,19 +463,22 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             INSERT OR REPLACE INTO kg_relations
             (id, from_entity, to_entity, relation_type, weight, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            relation.id,
-            relation.from_entity,
-            relation.to_entity,
-            relation.relation_type.value,
-            relation.weight,
-            relation.created_at.isoformat(),
-            json.dumps(relation.metadata),
-        ))
+        """,
+            (
+                relation.id,
+                relation.from_entity,
+                relation.to_entity,
+                relation.relation_type.value,
+                relation.weight,
+                relation.created_at.isoformat(),
+                json.dumps(relation.metadata),
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -424,7 +488,7 @@ class KnowledgeGraph:
         self,
         entity_id: str,
         relation_type: Optional[RelationType] = None,
-        direction: str = "both"  # "from", "to", "both"
+        direction: str = "both",  # "from", "to", "both"
     ) -> List[Tuple[Entity, Relation]]:
         """Get entities related to an entity."""
         conn = sqlite3.connect(self.db_path)
@@ -445,7 +509,7 @@ class KnowledgeGraph:
             SELECT r.*, e.id as entity_id, e.entity_type, e.data, e.confidence
             FROM kg_relations r
             JOIN kg_entities e ON (e.id = r.from_entity OR e.id = r.to_entity)
-            WHERE ({' OR '.join(conditions)}) AND e.id != ?
+            WHERE ({" OR ".join(conditions)}) AND e.id != ?
         """
         params.append(entity_id)
 
@@ -483,25 +547,40 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        def _sqlite_safe(val, default=""):
+            """Ensure a value is SQLite-compatible (str, int, float, bytes, None)."""
+            if val is None:
+                return default
+            if isinstance(val, (int, float, str, bytes)):
+                return val
+            if isinstance(val, (dict, list)):
+                return json.dumps(val)
+            return str(val)
+
+        c.execute(
+            """
             INSERT OR REPLACE INTO research_findings
             (id, source, finding_type, title, content, sentiment, relevance,
              impact_assessment, entities, confidence, created_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            finding.id,
-            finding.source,
-            finding.finding_type,
-            finding.title,
-            finding.content,
-            finding.sentiment,
-            finding.relevance,
-            json.dumps(finding.impact_assessment),
-            json.dumps(finding.entities),
-            finding.confidence,
-            finding.created_at.isoformat(),
-            json.dumps(finding.metadata),
-        ))
+        """,
+            (
+                _sqlite_safe(finding.id),
+                _sqlite_safe(finding.source),
+                _sqlite_safe(finding.finding_type),
+                _sqlite_safe(finding.title),
+                _sqlite_safe(finding.content, ""),
+                _sqlite_safe(finding.sentiment, 0.0),
+                _sqlite_safe(finding.relevance, 0.5),
+                _sqlite_safe(finding.impact_assessment, "{}"),
+                _sqlite_safe(finding.entities, "[]"),
+                _sqlite_safe(finding.confidence, 0.5),
+                _sqlite_safe(
+                    finding.created_at.isoformat() if finding.created_at else ""
+                ),
+                _sqlite_safe(finding.metadata, "{}"),
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -513,7 +592,7 @@ class KnowledgeGraph:
         finding_type: Optional[str] = None,
         since: Optional[datetime] = None,
         min_confidence: float = 0.0,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[ResearchFinding]:
         """Get research findings with filters."""
         conn = sqlite3.connect(self.db_path)
@@ -538,7 +617,7 @@ class KnowledgeGraph:
 
         query = f"""
             SELECT * FROM research_findings
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY created_at DESC
             LIMIT ?
         """
@@ -556,12 +635,15 @@ class KnowledgeGraph:
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             SELECT * FROM research_findings
             WHERE applied_at IS NULL
             ORDER BY confidence DESC, created_at DESC
             LIMIT ?
-        """, (limit,))
+        """,
+            (limit,),
+        )
 
         rows = c.fetchall()
         conn.close()
@@ -573,11 +655,14 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             UPDATE research_findings
             SET applied_at = ?, applied_to_strategy = ?
             WHERE id = ?
-        """, (datetime.utcnow().isoformat(), strategy_id, finding_id))
+        """,
+            (datetime.utcnow().isoformat(), strategy_id, finding_id),
+        )
 
         conn.commit()
         conn.close()
@@ -596,7 +681,9 @@ class KnowledgeGraph:
             entities=json.loads(row["entities"]),
             confidence=row["confidence"],
             created_at=datetime.fromisoformat(row["created_at"]),
-            applied_at=datetime.fromisoformat(row["applied_at"]) if row["applied_at"] else None,
+            applied_at=datetime.fromisoformat(row["applied_at"])
+            if row["applied_at"]
+            else None,
             applied_to_strategy=row["applied_to_strategy"],
             metadata=json.loads(row["metadata"]),
         )
@@ -608,27 +695,30 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO agent_decisions
             (id, agent_type, decision_type, context, reasoning_chain, conclusion,
              confidence, action_taken, outcome, created_at, requires_approval,
              approved_by, approved_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            decision.id,
-            decision.agent_type,
-            decision.decision_type,
-            json.dumps(decision.context),
-            json.dumps(decision.reasoning_chain),
-            decision.conclusion,
-            decision.confidence,
-            decision.action_taken,
-            decision.outcome,
-            decision.created_at.isoformat(),
-            1 if decision.requires_approval else 0,
-            decision.approved_by,
-            decision.approved_at.isoformat() if decision.approved_at else None,
-        ))
+        """,
+            (
+                decision.id,
+                decision.agent_type,
+                decision.decision_type,
+                json.dumps(decision.context),
+                json.dumps(decision.reasoning_chain),
+                decision.conclusion,
+                decision.confidence,
+                decision.action_taken,
+                decision.outcome,
+                decision.created_at.isoformat(),
+                1 if decision.requires_approval else 0,
+                decision.approved_by,
+                decision.approved_at.isoformat() if decision.approved_at else None,
+            ),
+        )
 
         conn.commit()
         conn.close()
@@ -640,7 +730,7 @@ class KnowledgeGraph:
         decision_type: Optional[str] = None,
         since: Optional[datetime] = None,
         requires_approval: Optional[bool] = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[AgentDecision]:
         """Get decisions with filters."""
         conn = sqlite3.connect(self.db_path)
@@ -663,9 +753,13 @@ class KnowledgeGraph:
             conditions.append("requires_approval = ?")
             params.append(1 if requires_approval else 0)
 
+        where_clause = ""
+        if conditions:
+            where_clause = "WHERE " + " AND ".join(conditions)
+
         query = f"""
             SELECT * FROM agent_decisions
-            {f'WHERE {" AND ".join(conditions)}' if conditions else ''}
+            {where_clause}
             ORDER BY created_at DESC
             LIMIT ?
         """
@@ -699,11 +793,14 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             UPDATE agent_decisions
             SET approved_by = ?, approved_at = ?
             WHERE id = ? AND requires_approval = 1
-        """, (approved_by, datetime.utcnow().isoformat(), decision_id))
+        """,
+            (approved_by, datetime.utcnow().isoformat(), decision_id),
+        )
 
         conn.commit()
         conn.close()
@@ -713,11 +810,14 @@ class KnowledgeGraph:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute("""
+        c.execute(
+            """
             UPDATE agent_decisions
             SET outcome = ?
             WHERE id = ?
-        """, (outcome, decision_id))
+        """,
+            (outcome, decision_id),
+        )
 
         conn.commit()
         conn.close()
@@ -737,7 +837,9 @@ class KnowledgeGraph:
             created_at=datetime.fromisoformat(row["created_at"]),
             requires_approval=bool(row["requires_approval"]),
             approved_by=row["approved_by"],
-            approved_at=datetime.fromisoformat(row["approved_at"]) if row["approved_at"] else None,
+            approved_at=datetime.fromisoformat(row["approved_at"])
+            if row["approved_at"]
+            else None,
         )
 
     # ==================== Summary & Stats ====================
@@ -762,7 +864,9 @@ class KnowledgeGraph:
         c.execute("SELECT COUNT(*) FROM agent_decisions")
         decision_count = c.fetchone()[0]
 
-        c.execute("SELECT COUNT(*) FROM agent_decisions WHERE requires_approval = 1 AND approved_at IS NULL")
+        c.execute(
+            "SELECT COUNT(*) FROM agent_decisions WHERE requires_approval = 1 AND approved_at IS NULL"
+        )
         pending_count = c.fetchone()[0]
 
         conn.close()
@@ -784,16 +888,22 @@ class KnowledgeGraph:
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
         # Remove old low-confidence entities
-        c.execute("""
+        c.execute(
+            """
             DELETE FROM kg_entities
             WHERE created_at < ? AND confidence < 0.3
-        """, (cutoff,))
+        """,
+            (cutoff,),
+        )
 
         # Remove old decisions with no outcome
-        c.execute("""
+        c.execute(
+            """
             DELETE FROM agent_decisions
             WHERE created_at < ? AND outcome IS NULL AND requires_approval = 0
-        """, (cutoff,))
+        """,
+            (cutoff,),
+        )
 
         conn.commit()
         conn.close()

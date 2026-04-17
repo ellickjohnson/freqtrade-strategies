@@ -50,6 +50,7 @@ export function ApprovalQueue({ onApprove, onReject }: ApprovalQueueProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [bulkProcessing, setBulkProcessing] = useState(false)
 
   useEffect(() => {
     fetchApprovals()
@@ -91,6 +92,30 @@ export function ApprovalQueue({ onApprove, onReject }: ApprovalQueueProps) {
       setError(e instanceof Error ? e.message : 'Failed to reject')
     } finally {
       setProcessing(null)
+    }
+  }
+
+  const handleApproveAll = async () => {
+    try {
+      setBulkProcessing(true)
+      await api.approveAllDecisions()
+      setApprovals([])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to approve all')
+    } finally {
+      setBulkProcessing(false)
+    }
+  }
+
+  const handleClearAll = async () => {
+    try {
+      setBulkProcessing(true)
+      await api.clearAllDecisions()
+      setApprovals([])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to clear all')
+    } finally {
+      setBulkProcessing(false)
     }
   }
 
@@ -162,6 +187,69 @@ export function ApprovalQueue({ onApprove, onReject }: ApprovalQueueProps) {
         <CardDescription>
           Autonomous agent decisions requiring your approval
         </CardDescription>
+        <div className="flex gap-2 mt-3">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="default"
+                size="sm"
+                className="bg-green-600 hover:bg-green-700"
+                disabled={bulkProcessing || approvals.length === 0}
+              >
+                {bulkProcessing ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 mr-1" />
+                )}
+                Approve All
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Approve All {approvals.length} Decisions?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will approve all pending decisions at once. This includes all decision types shown in the queue.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleApproveAll}>
+                  Approve All
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={bulkProcessing || approvals.length === 0}
+              >
+                <XCircle className="h-4 w-4 mr-1" />
+                Clear All
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Clear All {approvals.length} Decisions?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will reject and remove all pending decisions from the queue.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleClearAll}
+                  className="bg-red-500 hover:bg-red-600"
+                >
+                  Clear All
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">

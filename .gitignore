@@ -56,10 +56,14 @@ next-env.d.ts
 *.db
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
 data/*.db
 
 # Logs
 user_data/logs/
+user_data/*/tradesv3*.sqlite*
+user_data/models/
 *.log
 
 # FreqAI models (large files)

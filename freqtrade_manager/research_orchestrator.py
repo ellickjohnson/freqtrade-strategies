@@ -84,86 +84,103 @@ class ResearchOrchestrator:
             config_path = strategy.get("config_path")
             strategy_file = strategy.get("strategy_file")
 
+            if not config_path or not strategy_file:
+                raise ValueError(
+                    f"Strategy {strategy_id} missing config_path or strategy_file"
+                )
+
             if not self.container_manager:
                 raise ValueError("Container manager not available")
 
-            best_score = 0.0
-            best_params = {}
-            best_epoch = 0
-
-            for epoch in range(1, epochs + 1):
-                self.tracker.update_research_progress(
-                    research_id=research_id,
-                    epoch=epoch,
-                    current_score=best_score + (epoch * 0.001),
-                    best_score=best_score,
-                    best_params=best_params,
+            try:
+                from autonomous_agent.hyperopt_executor import (
+                    HyperoptExecutor,
+                    HyperoptConfig,
+                )
+                from autonomous_agent.knowledge_graph import KnowledgeGraph
+            except ImportError:
+                from freqtrade_manager.autonomous_agent.hyperopt_executor import (
+                    HyperoptExecutor,
+                    HyperoptConfig,
+                )
+                from freqtrade_manager.autonomous_agent.knowledge_graph import (
+                    KnowledgeGraph,
                 )
 
-                await asyncio.sleep(0.1)
-
-                if epoch % 10 == 0:
-                    self.agent_logger.log_research_activity(
-                        strategy_id=strategy_id,
-                        strategy_name=strategy.get("name", strategy_id[:8]),
-                        research_type="hyperopt",
-                        hypothesis=f"Testing epoch {epoch}/{epochs}",
-                        findings=f"Current best score: {best_score:.4f}",
-                        conclusion=f"Completed {epoch} epochs",
-                    )
-
-            fake_results = {
-                "win_rate": 0.65 + (best_score * 0.1),
-                "sharpe": 1.5 + best_score,
-                "max_drawdown": -0.08,
-                "profit_factor": 1.8 + best_score,
-            }
-
-            best_params = {
-                "rsi_oversold": 28,
-                "rsi_overbought": 72,
-                "stop_loss": -0.05,
-                "take_profit": 0.03,
-            }
-
-            improvement = 5.5 + (best_score * 2)
-            metrics = {
-                "win_rate": fake_results["win_rate"],
-                "sharpe": fake_results["sharpe"],
-                "max_drawdown": fake_results["max_drawdown"],
-                "profit_factor": fake_results["profit_factor"],
-            }
-
-            recommendations = [
-                f"Apply new RSI parameters: oversold={best_params['rsi_oversold']}, overbought={best_params['rsi_overbought']}",
-                f"Update stop loss to {best_params['stop_loss'] * 100}% for better risk management",
-                f"Set take profit target at {best_params['take_profit'] * 100}%",
-            ]
-
-            self.tracker.complete_research(
-                research_id=research_id,
-                results=fake_results,
-                best_params=best_params,
-                metrics=metrics,
-                conclusion=f"Found {improvement:.1f}% improvement through hyperopt",
-                recommendations=recommendations,
-                improvement_pct=improvement,
+            kg = KnowledgeGraph(
+                self.tracker.db_path
+                if hasattr(self.tracker, "db_path")
+                else "/data/dashboard.db"
             )
 
-            if self.tracker.should_apply_findings(research_id):
-                await self._apply_findings(strategy_id, best_params)
+            hyperopt_config = HyperoptConfig(
+                epochs=epochs,
+                spaces=spaces,
+                timerange=timerange,
+                min_trades=min_trades,
+            )
+
+            executor = HyperoptExecutor(
+                db_path="/data/dashboard.db",
+                knowledge_graph=kg,
+                config=hyperopt_config,
+            )
+
+            result = await executor.run_hyperopt(
+                strategy_id=strategy_id,
+                strategy_name=strategy.get("name", strategy_id[:8]),
+                strategy_file=strategy_file,
+                config_path=config_path,
+                timerange=timerange,
+                epochs=epochs,
+                spaces=spaces,
+            )
+
+            if result.status == "completed":
+                metrics = result.metrics
+                best_params = result.best_params
+                improvement = result.improvement_pct
+
+                recommendations = []
+                if best_params:
+                    for param_name, param_value in best_params.items():
+                        recommendations.append(f"Update {param_name} to {param_value}")
+                recommendations.append(f"Expected improvement: {improvement:.1f}%")
+
+                self.tracker.complete_research(
+                    research_id=research_id,
+                    results=metrics,
+                    best_params=best_params,
+                    metrics=metrics,
+                    conclusion=f"Found {improvement:.1f}% improvement through hyperopt",
+                    recommendations=recommendations,
+                    improvement_pct=improvement,
+                )
+
+                if self.tracker.should_apply_findings(research_id) and best_params:
+                    await self._apply_findings(strategy_id, best_params)
+            else:
+                self.tracker.fail_research(
+                    research_id, result.error or "Hyperopt failed with unknown error"
+                )
 
             self.agent_logger.log(
                 strategy_id=strategy_id,
                 strategy_name=strategy.get("name", strategy_id[:8]),
                 category=LogCategory.RESEARCH,
-                level=LogLevel.INFO,
-                title="Hyperopt Completed",
-                message=f"Completed {epochs} epochs with {improvement:.1f}% improvement",
-                reasoning=f"Best parameters: {json.dumps(best_params)}",
-                data={"research_id": research_id, "metrics": metrics},
+                level=LogLevel.INFO if result.status == "completed" else LogLevel.ERROR,
+                title="Hyperopt Completed"
+                if result.status == "completed"
+                else "Hyperopt Failed",
+                message=f"Hyperopt {result.status}: {result.epochs_completed}/{result.total_epochs} epochs",
+                reasoning=f"Best score: {result.best_score:.4f}, Improvement: {result.improvement_pct:.1f}%",
+                data={
+                    "research_id": research_id,
+                    "metrics": result.metrics,
+                    "result_status": result.status,
+                },
                 impact="high",
-                confidence=0.85 + improvement * 0.01,
+                confidence=0.85 if result.status == "completed" else 0.3,
             )
 
         except Exception as e:

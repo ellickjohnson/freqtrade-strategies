@@ -22,8 +22,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class HyperoptConfig:
     """Configuration for hyperopt execution."""
+
     epochs: int = 100
-    spaces: List[str] = field(default_factory=lambda: ["buy", "sell", "roi", "stoploss"])
+    spaces: List[str] = field(
+        default_factory=lambda: ["buy", "sell", "roi", "stoploss"]
+    )
     timerange: str = "20240101-"
     min_trades: int = 100
     max_open_trades: int = 3
@@ -40,6 +43,7 @@ class HyperoptConfig:
 @dataclass
 class HyperoptResult:
     """Result of a hyperopt run."""
+
     hyperopt_id: str
     strategy_id: str
     strategy_name: str
@@ -104,7 +108,9 @@ class HyperoptExecutor:
         Returns:
             HyperoptResult with final parameters
         """
-        hyperopt_id = f"hyperopt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{strategy_id[:8]}"
+        hyperopt_id = (
+            f"hyperopt_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{strategy_id[:8]}"
+        )
         timerange = timerange or self.config.timerange
         epochs = epochs or self.config.epochs
         spaces = spaces or self.config.spaces
@@ -184,21 +190,33 @@ class HyperoptExecutor:
         cmd = [
             self.config.freqtrade_cmd,
             "hyperopt",
-            "--config", config_path,
-            "--strategy", strategy_file,
-            "--timerange", timerange,
-            "--epochs", str(epochs),
-            "--spaces", " ".join(spaces),
-            "--min-trades", str(self.config.min_trades),
-            "--max-open-trades", str(self.config.max_open_trades),
-            "--stake-amount", str(self.config.stake_amount),
+            "--config",
+            config_path,
+            "--strategy",
+            strategy_file,
+            "--timerange",
+            timerange,
+            "--epochs",
+            str(epochs),
         ]
 
-        # Add joblib for parallelization
+        for space in spaces:
+            cmd.extend(["--spaces", space])
+
+        cmd.extend(
+            [
+                "--min-trades",
+                str(self.config.min_trades),
+                "--max-open-trades",
+                str(self.config.max_open_trades),
+                "--stake-amount",
+                str(self.config.stake_amount),
+            ]
+        )
+
         cmd.extend(["--jobs", str(os.cpu_count() or 2)])
 
-        # Add dry-run mode
-        cmd.append("--dry-run-wallet")
+        cmd.extend(["--dry-run-wallet"])
 
         return cmd
 
@@ -220,22 +238,24 @@ class HyperoptExecutor:
                 line_str = line.decode("utf-8", errors="replace").strip()
                 output_buffer.append(line_str)
 
-                # Parse epoch progress
                 if "Epoch" in line_str:
                     self._parse_epoch_progress(line_str, result)
 
-                # Parse best result
-                if "Best result:" in line_str:
+                if "Best result:" in line_str or "BEST" in line_str:
                     self._parse_best_result(line_str, result)
 
-        # Read both stdout and stderr
         await asyncio.gather(
             read_stream(process.stdout, "stdout"),
             read_stream(process.stderr, "stderr"),
         )
 
-        # Store full output for debugging
         result.results = [{"line": line} for line in output_buffer[-100:]]
+
+        try:
+            full_output = "\n".join(output_buffer)
+            self._parse_json_results(full_output, result)
+        except Exception as e:
+            logger.debug(f"Could not parse JSON from output: {e}")
 
     def _parse_epoch_progress(self, line: str, result: HyperoptResult):
         """Parse epoch progress from output line."""
@@ -264,66 +284,183 @@ class HyperoptExecutor:
     def _parse_best_result(self, line: str, result: HyperoptResult):
         """Parse best result from output line."""
         try:
-            # Example: "Best result: Win% 58.3%, Sharpe 2.12, Profit 15.4%"
             if "Win%" in line:
                 parts = line.replace(",", "").split()
                 for i, part in enumerate(parts):
                     if part == "Win%":
-                        result.metrics["win_rate"] = float(parts[i + 1].replace("%", "")) / 100
+                        result.metrics["win_rate"] = (
+                            float(parts[i + 1].replace("%", "")) / 100
+                        )
                     elif part == "Sharpe":
                         result.metrics["sharpe"] = float(parts[i + 1])
                     elif part == "Profit":
-                        result.metrics["profit_pct"] = float(parts[i + 1].replace("%", ""))
+                        result.metrics["profit_pct"] = float(
+                            parts[i + 1].replace("%", "")
+                        )
                     elif part == "Max" and parts[i + 1] == "DD":
-                        result.metrics["max_drawdown"] = float(parts[i + 2].replace("%", "")) / 100
+                        result.metrics["max_drawdown"] = (
+                            float(parts[i + 2].replace("%", "")) / 100
+                        )
 
-                # Calculate overall score (weighted combination)
                 win_rate = result.metrics.get("win_rate", 0.5)
                 sharpe = result.metrics.get("sharpe", 0)
                 max_dd = result.metrics.get("max_drawdown", 0.2)
 
-                # Score: favor high win rate, high sharpe, low drawdown
-                result.best_score = (win_rate * 0.3) + (min(sharpe / 3, 1) * 0.4) + ((1 - min(max_dd * 5, 1)) * 0.3)
+                result.best_score = (
+                    (win_rate * 0.3)
+                    + (min(sharpe / 3, 1) * 0.4)
+                    + ((1 - min(max_dd * 5, 1)) * 0.3)
+                )
 
         except Exception as e:
             logger.debug(f"Could not parse best result: {e}")
 
+    def _parse_json_results(self, full_output: str, result: HyperoptResult):
+        """Parse JSON results from Freqtrade hyperopt output."""
+        import re
+
+        json_patterns = [
+            r'\{[^{}]*"results"\s*:\s*\[.*?\][^{}]*\}',
+            r'\{[^{}]*"best_result"[^{}]*\}',
+        ]
+
+        for pattern in json_patterns:
+            matches = re.findall(pattern, full_output, re.DOTALL)
+            for match in matches:
+                try:
+                    data = json.loads(match)
+
+                    if (
+                        "results" in data
+                        and isinstance(data["results"], list)
+                        and data["results"]
+                    ):
+                        best = data["results"][0]
+                        if isinstance(best, dict):
+                            result.metrics["win_rate"] = best.get(
+                                "profit_mean",
+                                best.get("win_rate", result.metrics.get("win_rate", 0)),
+                            )
+                            result.metrics["sharpe"] = best.get(
+                                "sharpe", result.metrics.get("sharpe", 0)
+                            )
+                            result.metrics["profit_pct"] = best.get(
+                                "profit_total",
+                                best.get(
+                                    "profit_pct", result.metrics.get("profit_pct", 0)
+                                ),
+                            )
+                            result.metrics["max_drawdown"] = best.get(
+                                "max_drawdown", result.metrics.get("max_drawdown", 0)
+                            )
+
+                            if "params_details" in best:
+                                result.best_params.update(best["params_details"])
+                            if "params_not_optimized" in best:
+                                result.best_params.update(best["params_not_optimized"])
+
+                            win_rate = result.metrics.get("win_rate", 0.5)
+                            sharpe = result.metrics.get("sharpe", 0)
+                            max_dd = result.metrics.get("max_drawdown", 0.2)
+                            result.best_score = (
+                                (win_rate * 0.3)
+                                + (min(sharpe / 3, 1) * 0.4)
+                                + ((1 - min(max_dd * 5, 1)) * 0.3)
+                            )
+
+                    if "best_result" in data:
+                        best = data["best_result"]
+                        if isinstance(best, dict):
+                            for k, v in best.items():
+                                if k.startswith("params_"):
+                                    if isinstance(v, dict):
+                                        result.best_params.update(v)
+                    return
+                except json.JSONDecodeError:
+                    continue
+
     async def _extract_best_results(self, result: HyperoptResult):
         """Extract best parameters from hyperopt results file."""
-        # Freqtrade stores results in user_data/hyperopt_results/
         results_dir = Path(self.config.user_data_dir) / "hyperopt_results"
 
         if not results_dir.exists():
-            logger.warning("Hyperopt results directory not found")
+            logger.warning(
+                "Hyperopt results directory not found, using parsed output metrics"
+            )
+            self._calculate_improvement(result)
             return
 
-        # Find the most recent results file
-        result_files = sorted(results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        result_files = sorted(
+            results_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
 
         if not result_files:
-            logger.warning("No hyperopt results file found")
+            logger.warning(
+                "No hyperopt results file found, using parsed output metrics"
+            )
+            self._calculate_improvement(result)
             return
 
         try:
             with open(result_files[0], "r") as f:
                 results_data = json.load(f)
 
-            # Extract best parameters
-            if "params" in results_data:
-                result.best_params = results_data["params"]
+            if isinstance(results_data, dict):
+                if "params_details" in results_data:
+                    for space, params in results_data["params_details"].items():
+                        if isinstance(params, dict):
+                            result.best_params.update(params)
 
-            if "metrics" in results_data:
-                result.metrics.update(results_data["metrics"])
+                if (
+                    "results" in results_data
+                    and isinstance(results_data["results"], list)
+                    and results_data["results"]
+                ):
+                    best = results_data["results"][0]
+                    if isinstance(best, dict):
+                        if "profit_mean" in best:
+                            result.metrics.setdefault(
+                                "win_rate", best.get("profit_mean", 0)
+                            )
+                        if "sharpe" in best:
+                            result.metrics.setdefault("sharpe", best["sharpe"])
+                        if "profit_total" in best:
+                            result.metrics.setdefault(
+                                "profit_pct", best["profit_total"]
+                            )
+                        if "max_drawdown" in best:
+                            result.metrics.setdefault(
+                                "max_drawdown", best["max_drawdown"]
+                            )
 
-            # Calculate improvement vs baseline
-            baseline_sharpe = 0.5  # Reasonable baseline
-            current_sharpe = result.metrics.get("sharpe", 0)
+                        for key in ("params_details", "params_not_optimized"):
+                            if key in best and isinstance(best[key], dict):
+                                result.best_params.update(best[key])
 
-            if current_sharpe > baseline_sharpe:
-                result.improvement_pct = ((current_sharpe - baseline_sharpe) / baseline_sharpe) * 100
+            elif isinstance(results_data, list) and results_data:
+                best = results_data[0]
+                if isinstance(best, dict):
+                    for key in ("params_details", "params_not_optimized"):
+                        if key in best and isinstance(best[key], dict):
+                            result.best_params.update(best[key])
+
+            self._calculate_improvement(result)
 
         except Exception as e:
             logger.error(f"Failed to extract results: {e}")
+            self._calculate_improvement(result)
+
+    def _calculate_improvement(self, result: HyperoptResult):
+        """Calculate improvement vs baseline."""
+        baseline_sharpe = 0.5
+        current_sharpe = result.metrics.get("sharpe", 0)
+
+        if current_sharpe > baseline_sharpe:
+            result.improvement_pct = (
+                (current_sharpe - baseline_sharpe) / baseline_sharpe
+            ) * 100
+        else:
+            result.improvement_pct = 0
 
     def _log_hyperopt_start(self, result: HyperoptResult):
         """Log hyperopt start to database."""
@@ -375,7 +512,11 @@ class HyperoptExecutor:
                 metadata={
                     "epochs": result.epochs_completed,
                     "best_score": result.best_score,
-                    "duration_seconds": (result.end_time - result.start_time).total_seconds() if result.end_time else 0,
+                    "duration_seconds": (
+                        result.end_time - result.start_time
+                    ).total_seconds()
+                    if result.end_time
+                    else 0,
                 },
             )
 
@@ -411,7 +552,9 @@ class HyperoptExecutor:
 
         Returns comparison results for each combination.
         """
-        comparison_id = f"backtest_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{strategy_id[:8]}"
+        comparison_id = (
+            f"backtest_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{strategy_id[:8]}"
+        )
         results = []
 
         for timerange in timeranges:
@@ -449,9 +592,12 @@ class HyperoptExecutor:
         cmd = [
             self.config.freqtrade_cmd,
             "backtesting",
-            "--config", config_path,
-            "--strategy", strategy_file,
-            "--timerange", timerange,
+            "--config",
+            config_path,
+            "--strategy",
+            strategy_file,
+            "--timerange",
+            timerange,
             "--dry-run-wallet",
         ]
 
@@ -503,9 +649,13 @@ class HyperoptExecutor:
                     elif "Total profit:" in line:
                         profit_str = line.split(":")[1].strip()
                         if "%" in profit_str:
-                            result["profit_pct"] = float(profit_str.replace("%", "").strip())
+                            result["profit_pct"] = float(
+                                profit_str.replace("%", "").strip()
+                            )
                     elif "Win%" in line:
-                        result["win_rate"] = float(line.split(":")[1].strip().replace("%", "")) / 100
+                        result["win_rate"] = (
+                            float(line.split(":")[1].strip().replace("%", "")) / 100
+                        )
                     elif "Sharpe" in line:
                         result["sharpe"] = float(line.split(":")[1].strip())
                     elif "Max drawdown" in line:
@@ -536,5 +686,6 @@ def hyperopt_result_to_dict(self) -> Dict:
         "baseline_score": self.baseline_score,
         "error": self.error,
     }
+
 
 HyperoptResult.to_dict = hyperopt_result_to_dict

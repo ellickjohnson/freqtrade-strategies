@@ -1,7 +1,7 @@
 {
-  "max_open_trades": 5,
+  "max_open_trades": 3,
   "stake_currency": "USDT",
-  "stake_amount": 50,
+  "stake_amount": 100,
   "tradable_balance_ratio": 0.99,
   "fiat_display_currency": "USD",
   "dry_run": true,
@@ -42,7 +42,6 @@
       "DOT/USDT",
       "AVAX/USDT",
       "LINK/USDT",
-      "MATIC/USDT",
       "ATOM/USDT"
     ],
     "pair_blacklist": []
@@ -60,7 +59,7 @@
   "api_server": {
     "enabled": true,
     "listen_ip_address": "0.0.0.0",
-    "listen_port": 7077,
+    "listen_port": 7079,
     "verbosity": "error",
     "enable_openapi": true,
     "jwt_secret_key": "somethingrandom",
@@ -69,32 +68,29 @@
     "username": "freqtrader",
     "password": "freqtrader"
   },
-  "bot_name": "freqtrade_griddca",
-  "strategy": "GridDCA",
+  "bot_name": "freqtrade_breakoutmomentum",
+  "strategy": "BreakoutMomentum",
   "db_url": "sqlite:///user_data/tradesv3.dryrun.sqlite",
   "user_data_dir": "user_data",
   "timeframe": "15m",
-  "stoploss": -0.12,
+  "stoploss": -0.05,
   "trailing_stop": false,
+  "trailing_stop_positive": 0.01,
+  "trailing_stop_positive_offset": 0.02,
+  "trailing_only_offset_is_reached": false,
   "initial_state": "running",
   "force_entry_enable": false,
   "internals": {
     "process_only_new_candles": false
   },
   "strategy_params": {
-    "rsi_oversold": 25,
-    "rsi_overbought": 75,
-    "take_profit_pct": 2.0,
+    "breakout_period": 20,
+    "adx_threshold": 22,
+    "volume_mult": 1.8,
     "rsi_entry_threshold": 55,
-    "volume_factor": 0.7,
-    "minimal_roi": {
-      "0": 0.04,
-      "60": 0.01
-    },
+    "volume_factor": 0.6,
     "pairs_to_add": [
-      "ETH/USDT"
-    ],
-    "trailing_stop_positive": 0.02,
-    "dry_run_wallet": 5000
+      "XRP/USDT"
+    ]
   }
 }

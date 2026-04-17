@@ -1,6 +1,3 @@
-# GridDCA Strategy for Freqtrade
-# Version: 2.0 - Mean Reversion with DCA (Original Best Performer)
-
 from freqtrade.strategy import IStrategy, IntParameter, DecimalParameter
 from freqtrade.persistence import Trade
 from pandas import DataFrame
@@ -13,52 +10,35 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class GridDCA(IStrategy):
-    """GridDCA v2.0 - Mean Reversion with DCA
-
-    BEST PERFORMER: 471 trades, 68.6% win rate, -7.33% loss, 7.73% drawdown
-
-    Strategy Logic:
-    - Enter when RSI oversold (< 25) and price below EMA20
-    - DCA into positions on successive dips
-    - Exit on RSI overbought (> 75) or profit target (2%)
-    - Fixed 10% stop loss (no trailing, no ATR complexity)
-    - 48h timeout for positions >5% underwater
-
-    Key: Let mean reversion breathe - no aggressive early exits
-    """
-
-    # Hyperoptable Parameters
+class SwingDCA(IStrategy):
     rsi_oversold = IntParameter(25, 45, default=40, space="buy", optimize=True)
     rsi_overbought = IntParameter(60, 80, default=70, space="sell", optimize=True)
     take_profit_pct = DecimalParameter(
-        1.0, 3.0, default=2.0, space="sell", optimize=True
+        2.0, 5.0, default=3.5, space="sell", optimize=True
     )
-    max_open_trades_param = IntParameter(3, 5, default=4, space="buy", optimize=True)
     cooldown_candles = IntParameter(2, 5, default=3, space="buy", optimize=True)
+    max_open_trades_param = IntParameter(2, 4, default=3, space="buy", optimize=True)
 
-    timeframe = "15m"
+    timeframe = "1h"
     can_short = False
+    stoploss = -0.08
 
-    # Position adjustment for DCA
+    trailing_stop = True
+    trailing_stop_positive = 0.015
+    trailing_stop_positive_offset = 0.02
+    trailing_only_offset_is_reached = True
+
+    minimal_roi = {"0": 0.04, "60": 0.02, "240": 0.01, "720": 0.005}
+
+    max_open_trades = 3
+    startup_candle_count = 200
+
     position_adjustment_enable = True
-    max_entry_position_adjustment = 3
+    max_entry_position_adjustment = 2
 
-    # Risk management - FIXED, SIMPLE
-    stoploss = -0.10
-    use_custom_stoploss = False
-    trailing_stop = False
-
-    # ROI targets
-    minimal_roi = {"0": 0.05, "30": 0.03, "60": 0.02, "120": 0.01}
-
-    max_open_trades = 5
-    startup_candle_count = 100
-
-    # Fixed constants
     RSI_OVERSOLD = 40
     RSI_OVERBOUGHT = 70
-    TAKE_PROFIT = 2.0
+    TAKE_PROFIT = 3.5
     COOLDOWN = 3
 
     @property
@@ -74,36 +54,39 @@ class GridDCA(IStrategy):
         dataframe["bb_upper"], dataframe["bb_mid"], dataframe["bb_lower"] = (
             talib.BBANDS(close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0)
         )
-        dataframe["price_below_ema20"] = dataframe["close"] < dataframe["ema_20"]
-        dataframe["rsi_oversold"] = dataframe["rsi"] < self.RSI_OVERSOLD
-        dataframe["rsi_overbought"] = dataframe["rsi"] > self.RSI_OVERBOUGHT
+        dataframe["atr"] = talib.ATR(
+            dataframe["high"].values,
+            dataframe["low"].values,
+            close,
+            timeperiod=14,
+        )
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        # Primary: RSI oversold + price below EMA20 (mean reversion)
         dataframe.loc[
-            (dataframe["rsi_oversold"]) & (dataframe["price_below_ema20"]), "enter_long"
-        ] = 1
-
-        # Secondary: Price touches lower Bollinger Band (oversold bounce)
-        dataframe.loc[
-            (dataframe["close"] < dataframe["bb_lower"] * 1.01)
-            & (dataframe["rsi"] < 50),
+            (dataframe["rsi"] < self.RSI_OVERSOLD),
             "enter_long",
         ] = 1
 
-        # Tertiary: RSI bouncing from oversold (just crossed above threshold)
         dataframe.loc[
-            (dataframe["rsi"] > self.RSI_OVERSOLD)
-            & (dataframe["rsi"].shift(1) <= self.RSI_OVERSOLD)
-            & (dataframe["close"] > dataframe["ema_20"]),
+            (dataframe["close"] < dataframe["bb_lower"]),
+            "enter_long",
+        ] = 1
+
+        rsi_cross_up = (dataframe["rsi"] > 35) & (dataframe["rsi"].shift(1) <= 35)
+        dataframe.loc[
+            rsi_cross_up,
             "enter_long",
         ] = 1
 
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        dataframe.loc[dataframe["rsi_overbought"], "exit_long"] = 1
+        dataframe.loc[
+            (dataframe["rsi"] > self.RSI_OVERBOUGHT)
+            | (dataframe["close"] > dataframe["bb_upper"]),
+            "exit_long",
+        ] = 1
         return dataframe
 
     def custom_stake_amount(
@@ -119,14 +102,15 @@ class GridDCA(IStrategy):
         side: str,
         **kwargs,
     ) -> float:
-        base_stake = 50.0
+        base_stake = 100.0
+        dca_stake = 50.0
         try:
             trades = Trade.get_trades_proxy(pair=pair, is_open=True)
             trade_count = len(list(trades))
         except Exception:
             trade_count = 0
         if trade_count > 0:
-            stake = base_stake / (trade_count + 1)
+            stake = dca_stake
         else:
             stake = base_stake
         return max(stake, min_stake) if min_stake else stake
@@ -157,22 +141,19 @@ class GridDCA(IStrategy):
         current_profit: float,
         **kwargs,
     ) -> Optional[str]:
+        if current_profit > (self.TAKE_PROFIT / 100):
+            return "swing_profit_target"
+
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) < 1:
             return None
         last_candle = dataframe.iloc[-1]
 
-        # Exit at profit target (2%)
-        if current_profit > (self.take_profit_pct.value / 100):
-            return "grid_profit_target"
-
-        # Exit if RSI overbought and in profit
-        if current_profit > 0.01 and last_candle["rsi"] > self.RSI_OVERBOUGHT:
+        if current_profit > 0.015 and last_candle["rsi"] > 65:
             return "rsi_overbought_profit"
 
-        # Time exit for underwater positions (48h at -5%)
         trade_duration = (current_time - trade.open_date_utc).total_seconds() / 3600
-        if trade_duration > 48 and current_profit < -0.05:
+        if trade_duration > 72 and current_profit < -0.04:
             return "timeout_large_loss"
 
         return None

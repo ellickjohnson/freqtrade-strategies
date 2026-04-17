@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Type, Union
 
 try:
     from pydantic import BaseModel
+
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
@@ -35,13 +36,14 @@ class LLMProvider(Enum):
 @dataclass
 class LLMConfig:
     """Configuration for LLM client."""
+
     provider: LLMProvider = LLMProvider.ANTHROPIC
     model: str = "claude-sonnet-4-6"
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     max_tokens: int = 1024
     temperature: float = 0.7
-    timeout_seconds: int = 300
+    timeout_seconds: int = 60
 
     # Rate limiting
     requests_per_minute: int = 60
@@ -55,6 +57,7 @@ class LLMConfig:
 @dataclass
 class LLMResponse:
     """Structured response from LLM."""
+
     content: str
     model: str
     usage: Dict[str, int]
@@ -68,6 +71,7 @@ class LLMResponse:
 @dataclass
 class TokenUsage:
     """Track token usage for budgeting."""
+
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     request_count: int = 0
@@ -129,6 +133,7 @@ class AnthropicProvider(BaseLLMProvider):
         if not self._initialized:
             try:
                 import anthropic
+
                 self.client = anthropic.AsyncAnthropic(api_key=self.api_key)
                 self._initialized = True
             except ImportError:
@@ -228,6 +233,7 @@ class OpenAIProvider(BaseLLMProvider):
         if not self._initialized:
             try:
                 from openai import AsyncOpenAI
+
                 self.client = AsyncOpenAI(api_key=self.api_key)
                 self._initialized = True
             except ImportError:
@@ -315,7 +321,9 @@ class OllamaProvider(BaseLLMProvider):
 
     def __init__(self, config: LLMConfig):
         self.config = config
-        self.base_url = config.base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.base_url = config.base_url or os.getenv(
+            "OLLAMA_BASE_URL", "http://localhost:11434"
+        )
 
     async def complete(
         self,
@@ -375,15 +383,27 @@ class OllamaProvider(BaseLLMProvider):
         system_prompt: Optional[str] = None,
     ) -> LLMResponse:
         response = await self.complete(
-            prompt=f"{prompt}\n\nRespond with valid JSON only.",
+            prompt=f"{prompt}\n\nRespond with valid JSON only. No markdown, no code fences, no explanation.",
             system_prompt=system_prompt,
             temperature=0.3,
         )
 
         try:
-            parsed = json.loads(response.content.strip())
+            content = response.content.strip()
+            if content.startswith("```json"):
+                content = content.split("```json")[1].split("```")[0]
+            elif content.startswith("```"):
+                content = content.split("```")[1].split("```")[0]
+
+            parsed = json.loads(content.strip())
             response.parsed_json = parsed
-        except json.JSONDecodeError:
+
+            if "confidence" in parsed:
+                response.confidence = float(parsed["confidence"])
+            if "reasoning_chain" in parsed:
+                response.reasoning_chain = parsed["reasoning_chain"]
+        except json.JSONDecodeError as e:
+            logger.warning(f"Ollama JSON parse failed: {e}")
             response.parsed_json = None
 
         return response
@@ -409,6 +429,7 @@ class LLMClient:
         self.token_usage = TokenUsage()
         self._request_times: List[float] = []
         self._lock = asyncio.Lock()
+        self._available: Optional[bool] = None
 
     def _create_provider(self) -> BaseLLMProvider:
         if self.config.provider == LLMProvider.ANTHROPIC:
@@ -445,12 +466,7 @@ class LLMClient:
 
             self._request_times.append(now)
 
-    async def _retry_with_backoff(
-        self,
-        func,
-        *args,
-        **kwargs
-    ) -> LLMResponse:
+    async def _retry_with_backoff(self, func, *args, **kwargs) -> LLMResponse:
         """Execute with exponential backoff retry."""
         last_error = None
 
@@ -462,19 +478,56 @@ class LLMClient:
                 # Track token usage
                 usage = response.usage
                 self.token_usage.add_usage(
-                    usage.get("input_tokens", 0),
-                    usage.get("output_tokens", 0)
+                    usage.get("input_tokens", 0), usage.get("output_tokens", 0)
                 )
 
                 return response
 
             except Exception as e:
                 last_error = e
-                delay = self.config.retry_delay_seconds * (2 ** attempt)
+                delay = self.config.retry_delay_seconds * (2**attempt)
                 logger.warning(f"LLM request failed (attempt {attempt + 1}): {e}")
                 await asyncio.sleep(delay)
 
-        raise RuntimeError(f"LLM request failed after {self.config.max_retries} retries: {last_error}")
+        raise RuntimeError(
+            f"LLM request failed after {self.config.max_retries} retries: {last_error}"
+        )
+
+    async def is_available(self) -> bool:
+        """Check if the LLM provider is reachable."""
+        if self._available is True:
+            return True
+
+        try:
+            if self.config.provider == LLMProvider.OLLAMA:
+                import aiohttp
+
+                base_url = self.config.base_url or os.getenv(
+                    "OLLAMA_BASE_URL", "http://localhost:11434"
+                )
+                timeout = aiohttp.ClientTimeout(total=5)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{base_url}/api/tags", timeout=timeout
+                    ) as resp:
+                        if resp.status == 200:
+                            self._available = True
+                            return True
+            elif self.config.provider == LLMProvider.ANTHROPIC:
+                if self.config.api_key or os.getenv("ANTHROPIC_API_KEY"):
+                    self._available = True
+                    return True
+            elif self.config.provider == LLMProvider.OPENAI:
+                if self.config.api_key or os.getenv("OPENAI_API_KEY"):
+                    self._available = True
+                    return True
+        except Exception as e:
+            logger.warning(
+                f"LLM provider {self.config.provider.value} not available: {e}"
+            )
+
+        self._available = False
+        return False
 
     async def analyze(
         self,
@@ -491,16 +544,28 @@ class LLMClient:
             system_prompt: Optional system context
 
         Returns:
-            Parsed JSON result
+            Parsed JSON result, or empty dict if LLM unavailable
         """
-        response = await self._retry_with_backoff(
-            self.provider.complete_json,
-            prompt=prompt,
-            schema=schema,
-            system_prompt=system_prompt,
-        )
+        if not await self.is_available():
+            logger.warning(
+                f"LLM provider {self.config.provider.value} unavailable - returning empty analysis"
+            )
+            return {}
 
-        return response.parsed_json or {}
+        try:
+            response = await self._retry_with_backoff(
+                self.provider.complete_json,
+                prompt=prompt,
+                schema=schema,
+                system_prompt=system_prompt,
+            )
+            return response.parsed_json or {}
+        except RuntimeError as e:
+            logger.error(f"LLM analysis failed after retries: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"LLM analysis failed: {e}")
+            return {}
 
     async def reason(
         self,
@@ -525,16 +590,13 @@ class LLMClient:
                 "reasoning_chain": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Step-by-step reasoning"
+                    "description": "Step-by-step reasoning",
                 },
                 "conclusion": {"type": "string"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "recommended_actions": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
+                "recommended_actions": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["reasoning_chain", "conclusion", "confidence"]
+            "required": ["reasoning_chain", "conclusion", "confidence"],
         }
 
         prompt = f"""Given the following context, provide step-by-step reasoning to achieve the goal.
@@ -583,17 +645,14 @@ Provide your reasoning as a structured JSON response."""
                             "fact": {"type": "string"},
                             "source": {"type": "string"},
                             "relevance": {"type": "number"},
-                            "sentiment": {"type": "number"}
-                        }
-                    }
+                            "sentiment": {"type": "number"},
+                        },
+                    },
                 },
                 "summary": {"type": "string"},
-                "recommendations": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                },
-                "confidence": {"type": "number"}
-            }
+                "recommendations": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "number"},
+            },
         }
 
         prompt = f"""Research and analyze the following:
@@ -643,16 +702,13 @@ Provide structured research findings."""
                         "properties": {
                             "factor": {"type": "string"},
                             "weight": {"type": "number"},
-                            "impact": {"type": "string"}
-                        }
-                    }
+                            "impact": {"type": "string"},
+                        },
+                    },
                 },
-                "alternatives": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
+                "alternatives": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["selected_option", "reasoning", "confidence"]
+            "required": ["selected_option", "reasoning", "confidence"],
         }
 
         prompt = f"""Make a decision based on the following:
@@ -683,5 +739,6 @@ Provide your decision with reasoning."""
             "total_output_tokens": self.token_usage.total_output_tokens,
             "request_count": self.token_usage.request_count,
             "daily_budget": self.config.tokens_per_day,
-            "budget_remaining": self.config.tokens_per_day - self.token_usage.get_daily_usage(),
+            "budget_remaining": self.config.tokens_per_day
+            - self.token_usage.get_daily_usage(),
         }

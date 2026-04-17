@@ -8,13 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
 from db import Database, init_database
 from config_parser import ConfigParser
 from container_manager import ContainerManager
 from backtest_runner import BacktestRunner
 from freqai_adapter import FreqAIAdapter
 from slack_notifier import SlackNotifier
-from websocket_server import WebSocketServer
+from websocket_server import WebSocketServer, TradeMonitor
 from manager import FreqtradeManager
 from research_orchestrator import ResearchOrchestrator
 
@@ -63,6 +68,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Could not initialize container manager: {e}")
         container_manager = None
 
+    ws_server = WebSocketServer(port=MANAGER_PORT)
+
     manager = FreqtradeManager(
         db=db,
         config_parser=config_parser,
@@ -70,8 +77,12 @@ async def lifespan(app: FastAPI):
         backtest_runner=backtest_runner,
         freqai_adapter=freqai_adapter,
         slack_notifier=slack_notifier,
+        trade_monitor=TradeMonitor(ws_server, user_data_dir=USER_DATA_DIR),
         templates_dir="/templates",
     )
+
+    ws_server.set_manager(manager)
+    ws_server.set_slack(slack_notifier)
 
     # Initialize research orchestrator
     research_orchestrator = ResearchOrchestrator(
@@ -85,13 +96,39 @@ async def lifespan(app: FastAPI):
     auto_detected = await manager.auto_detect_strategies()
     logger.info(f"Auto-detected {len(auto_detected)} existing strategies")
 
-    ws_server = WebSocketServer(port=MANAGER_PORT)
-    ws_server.set_manager(manager)
-    ws_server.set_slack(slack_notifier)
+    # Start trade monitoring for all strategies with trade databases
+    trade_monitor = manager.trade_monitor
+    strategies_in_db = await db.get_strategies()
+    for strategy in strategies_in_db:
+        strategy_id = strategy["id"]
+        db_path = Path(USER_DATA_DIR) / strategy_id / "tradesv3.dryrun.sqlite"
+        if db_path.exists():
+            try:
+                await trade_monitor.start_monitoring(strategy_id)
+                logger.info(
+                    f"Started trade monitoring for {strategy.get('name', strategy_id)}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to start monitoring {strategy.get('name', strategy_id)}: {e}"
+                )
+
+    # Also scan for strategy directories not yet in DB
+    user_data_path = Path(USER_DATA_DIR)
+    for strategy_dir in user_data_path.iterdir():
+        if strategy_dir.is_dir() and (strategy_dir / "tradesv3.dryrun.sqlite").exists():
+            strategy_id = strategy_dir.name
+            if strategy_id not in trade_monitor.monitored_strategies:
+                try:
+                    await trade_monitor.start_monitoring(strategy_id)
+                    logger.info(f"Started trade monitoring for directory {strategy_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to start monitoring {strategy_id}: {e}")
 
     # Setup autonomous agent routes AFTER manager and ws_server are initialized
     try:
         from autonomous_api import setup_autonomous_routes
+
         autonomous_orchestrator = setup_autonomous_routes(app, db, manager, ws_server)
         logger.info("Autonomous agent routes configured successfully")
     except ImportError as e:
@@ -104,7 +141,9 @@ async def lifespan(app: FastAPI):
     ws_task = asyncio.create_task(ws_server.start())
 
     # Auto-start autonomous agent if requested
-    if autonomous_orchestrator and getattr(autonomous_orchestrator, '_autostart_requested', False):
+    if autonomous_orchestrator and getattr(
+        autonomous_orchestrator, "_autostart_requested", False
+    ):
         asyncio.create_task(autonomous_orchestrator.start())
         logger.info("Autonomous agent auto-started")
 

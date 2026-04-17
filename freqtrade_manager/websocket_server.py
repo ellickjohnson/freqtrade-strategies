@@ -157,7 +157,6 @@ class TradeMonitor:
 
     async def start_monitoring(self, strategy_id: str):
         self.monitored_strategies.add(strategy_id)
-
         asyncio.create_task(self._monitor_trades(strategy_id))
 
     async def stop_monitoring(self, strategy_id: str):
@@ -195,6 +194,14 @@ class TradeMonitor:
                     new_trades = cursor.fetchall()
 
                     for trade in new_trades:
+                        is_open = trade[6] == 1
+                        pnl = trade[3] if trade[3] is not None else 0.0
+
+                        if is_open:
+                            reason = "Strategy entry conditions met"
+                        else:
+                            reason = trade[7] or "Strategy exit signal"
+
                         await self.ws_server.broadcast(
                             "trade",
                             {
@@ -205,10 +212,25 @@ class TradeMonitor:
                                 "profit_abs": trade[3],
                                 "open_date": trade[4],
                                 "close_date": trade[5],
-                                "is_open": trade[6],
-                                "exit_reason": trade[7],
+                                "is_open": is_open,
+                                "exit_reason": reason,
+                                "profit_pct": (
+                                    (trade[2] - trade[1]) / trade[1] * 100
+                                    if trade[1] is not None and trade[1] > 0
+                                    else 0
+                                ),
                             },
                         )
+
+                        if self.ws_server.slack:
+                            await self.ws_server.slack.send_trade_alert(
+                                strategy_name=strategy_id[:8],
+                                action="sell" if not is_open else "buy",
+                                pair=trade[0],
+                                price=trade[1] if is_open else (trade[2] or trade[1]),
+                                reason=reason,
+                                pnl=None if is_open else pnl,
+                            )
 
                     last_trade_count = current_count
 
